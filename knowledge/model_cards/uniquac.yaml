@@ -1,0 +1,8 @@
+model_name: UNIQUAC
+family: activity_coefficient
+supported_tasks: [VLE, LLE]
+excluded_systems: [electrolyte_without_extension]
+requires_binary_parameters: true
+pressure_regime: [low, moderate]
+validation_requirements: [composition_balance, equilibrium_residual, phase_stability]
+implementation_status: contract_only

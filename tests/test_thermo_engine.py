@@ -1,0 +1,179 @@
+"""Behavior tests at the public thermodynamic Python API seam."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import pytest
+
+from schemas.domain import ComponentIdentity, TaskManifest, ThermodynamicConditions
+from thermo_engine import calculate_equilibrium, validate_equilibrium_result
+from thermo_engine.errors import ThermoEquiError
+from thermo_engine.parameters import reverse_binary_parameter_direction
+from thermo_engine.units import normalize_composition, pressure_to_kpa, temperature_to_kelvin
+
+BENZENE = ComponentIdentity(component_id="benzene", name="Benzene", cas_number="71-43-2")
+TOLUENE = ComponentIdentity(component_id="toluene", name="Toluene", cas_number="108-88-3")
+
+
+def manifest(calculation_type: str, conditions: ThermodynamicConditions, points: int = 11) -> TaskManifest:
+    return TaskManifest(
+        equilibrium_type="FLASH" if calculation_type == "tp_flash" else "VLE",
+        calculation_type=calculation_type,
+        components=[BENZENE, TOLUENE],
+        conditions=conditions,
+        model_name="Ideal/Raoult",
+        points=points,
+    )
+
+
+def test_units_and_composition_are_normalized_explicitly() -> None:
+    assert pressure_to_kpa(1.0, "atm") == pytest.approx(101.325)
+    assert temperature_to_kelvin(25.0, "C") == pytest.approx(298.15)
+    assert normalize_composition([2.0, 3.0]) == pytest.approx([0.4, 0.6])
+
+
+def test_bubble_point_has_expected_endpoint_and_equilibrium_invariant() -> None:
+    result = calculate_equilibrium(
+        manifest(
+            "bubble_point",
+            ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[1.0, 0.0]),
+        )
+    )
+    assert result.temperature_K == pytest.approx(353.25, abs=0.25)
+    assert result.points[0].vapor_composition == pytest.approx([1.0, 0.0], abs=1e-9)
+    assert result.residual < 1e-7
+
+
+def test_dew_and_bubble_points_are_self_consistent() -> None:
+    bubble = calculate_equilibrium(
+        manifest(
+            "bubble_point",
+            ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.4, 0.6]),
+        )
+    )
+    dew = calculate_equilibrium(
+        manifest(
+            "dew_point",
+            ThermodynamicConditions(
+                pressure_kPa=101.325,
+                vapor_composition=bubble.points[0].vapor_composition,
+            ),
+        )
+    )
+    assert dew.temperature_K == pytest.approx(bubble.temperature_K, abs=1e-6)
+    assert dew.points[0].liquid_composition == pytest.approx([0.4, 0.6], abs=1e-7)
+
+
+def test_binary_isobaric_curve_has_pure_endpoints_and_valid_points() -> None:
+    result = calculate_equilibrium(manifest("isobaric_vle", ThermodynamicConditions(pressure_kPa=101.325), points=9))
+    report = validate_equilibrium_result(result)
+    assert len(result.points) == 9
+    assert result.points[0].liquid_composition == pytest.approx([0.0, 1.0])
+    assert result.points[-1].liquid_composition == pytest.approx([1.0, 0.0])
+    assert report.overall_status in {"passed", "warning"}
+    assert report.maximum_equilibrium_residual < 1e-6
+
+
+def test_tp_flash_closes_material_balance() -> None:
+    result = calculate_equilibrium(
+        manifest(
+            "tp_flash",
+            ThermodynamicConditions(
+                temperature_K=365.0,
+                pressure_kPa=101.325,
+                feed_composition=[0.5, 0.5],
+            ),
+        )
+    )
+    report = validate_equilibrium_result(result)
+    assert result.vapor_fraction is not None
+    assert 0.0 <= result.vapor_fraction <= 1.0
+    assert report.material_balance.passed
+    assert report.convergence.passed
+
+
+def test_missing_nonideal_parameters_never_produce_a_result() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.5, 0.5]),
+    ).model_copy(update={"model_name": "NRTL"})
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "missing_parameters"
+
+
+def test_ideal_benzene_toluene_has_no_internal_azeotrope() -> None:
+    result = calculate_equilibrium(manifest("azeotrope", ThermodynamicConditions(pressure_kPa=101.325), points=51))
+    assert result.points == []
+    assert any("No internal azeotrope" in warning for warning in result.warnings)
+
+
+def test_directional_parameters_reverse_explicitly() -> None:
+    fixture = json.loads((Path(__file__).parent / "fixtures" / "synthetic_nrtl.json").read_text(encoding="utf-8"))
+    reversed_parameters = reverse_binary_parameter_direction(fixture["parameters"], [("tau12", "tau21")])
+    assert reversed_parameters == {"tau12": -0.4, "tau21": 1.2, "alpha": 0.3}
+
+
+def test_repeated_solver_runs_are_numerically_consistent() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.4, 0.6]),
+    )
+    temperatures = [calculate_equilibrium(task).temperature_K for _ in range(3)]
+    assert temperatures == pytest.approx([temperatures[0]] * 3, abs=1e-12)
+
+
+def test_lle_contract_refuses_inapplicable_ideal_model() -> None:
+    task = manifest("lle", ThermodynamicConditions(temperature_K=298.15)).model_copy(update={"equilibrium_type": "LLE"})
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "unsupported_model"
+
+
+def test_mass_fraction_is_rejected_instead_of_misread_as_mole_fraction() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.5, 0.5]),
+    ).model_copy(update={"composition_basis": "mass_fraction"})
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "unsupported_model"
+
+
+def test_ideal_model_is_blocked_outside_configured_pressure_regime() -> None:
+    task = manifest(
+        "tp_flash",
+        ThermodynamicConditions(temperature_K=365.0, pressure_kPa=600.0, feed_composition=[0.5, 0.5]),
+    )
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "parameter_out_of_domain"
+
+
+def test_unimplemented_eos_is_not_misreported_as_missing_parameters() -> None:
+    task = manifest(
+        "tp_flash",
+        ThermodynamicConditions(temperature_K=365.0, pressure_kPa=101.325, feed_composition=[0.5, 0.5]),
+    ).model_copy(update={"model_name": "Peng-Robinson"})
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "unsupported_model"
+
+
+def test_structured_polymer_task_is_rejected_by_shared_service_guard() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.5, 0.5]),
+    ).model_copy(
+        update={
+            "components": [
+                ComponentIdentity(component_id="polymer-a", name="Polymer A"),
+                ComponentIdentity(component_id="solvent-b", name="Solvent B"),
+            ]
+        }
+    )
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "unsupported_model"

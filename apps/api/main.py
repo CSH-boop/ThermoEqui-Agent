@@ -1,0 +1,284 @@
+"""HTTP API for chat, calculations, validation, evidence, and exports."""
+
+from __future__ import annotations
+
+import csv
+import io
+import json
+import logging
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
+from uuid import uuid4
+
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, Response
+from pydantic import BaseModel
+
+from agent.executor import execute_task
+from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
+from agent.providers import OpenAIProvider
+from agent.router import load_model_cards, recommend_models
+from database.session import Repository, initialize_database
+from schemas.domain import (
+    CalculationEnvelope,
+    CalculationResult,
+    ChatRequest,
+    ChatResponse,
+    ErrorBody,
+    ErrorResponse,
+    ModelCard,
+    ModelRecommendation,
+    ParameterSet,
+    RunRecord,
+    TaskManifest,
+    ValidationReport,
+)
+from thermo_engine.errors import ThermoEquiError
+from thermo_engine.service import validate_equilibrium_result
+
+logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s %(message)s")
+logger = logging.getLogger("thermoequi.api")
+repository = Repository()
+
+
+def configured_provider() -> DeterministicProvider | OpenAIProvider:
+    if os.getenv("LLM_PROVIDER", "deterministic").casefold() == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        if api_key:
+            return OpenAIProvider(api_key=api_key, model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))
+        logger.warning("LLM_PROVIDER=openai but no API key is set; using deterministic provider")
+    return DeterministicProvider()
+
+
+orchestrator = ConversationOrchestrator(configured_provider())
+
+
+@asynccontextmanager
+async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+    initialize_database()
+    yield
+
+
+app = FastAPI(
+    title="ThermoEqui-Agent API",
+    version="0.1.0",
+    description="Knowledge-grounded and physically verified phase-equilibrium API.",
+    lifespan=lifespan,
+)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:3000"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def request_context(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+    request_id = request.headers.get("X-Request-ID", str(uuid4()))
+    request.state.request_id = request_id
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = request_id
+    return response
+
+
+@app.exception_handler(ThermoEquiError)
+async def thermo_error(request: Request, exc: ThermoEquiError) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code=exc.detail.failure_type,
+            message=exc.detail.message,
+            details={**exc.detail.details, "recovery_action": exc.detail.recovery_action},
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
+
+
+@app.exception_handler(ValueError)
+async def value_error(request: Request, exc: ValueError) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code="invalid_input",
+            message=str(exc),
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
+
+
+@app.exception_handler(RequestValidationError)
+async def request_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code="request_validation_error",
+            message="Request payload validation failed.",
+            details={"errors": exc.errors()},
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
+
+
+@app.exception_handler(HTTPException)
+async def http_error(request: Request, exc: HTTPException) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code=f"http_{exc.status_code}",
+            message=str(exc.detail),
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=exc.status_code, content=payload.model_dump(mode="json"))
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {
+        "status": "ok",
+        "version": "0.1.0",
+        "llm_provider": type(orchestrator.provider).__name__,
+    }
+
+
+@app.post("/api/chat", response_model=ChatResponse)
+async def chat(body: ChatRequest, request: Request) -> ChatResponse:
+    response = await orchestrator.chat(body.message, body.conversation_id)
+    response.request_id = request.state.request_id
+    payload = response.model_dump(mode="json")
+    repository.save_chat(response.conversation_id, body.message, payload)
+    if response.calculation:
+        repository.save_run(response.calculation, request.state.request_id)
+    return response
+
+
+class ParseResponse(BaseModel):
+    intent: str
+    task: TaskManifest | None
+
+
+@app.post("/api/tasks/parse", response_model=ParseResponse)
+async def parse_task(body: ChatRequest) -> ParseResponse:
+    intent, task = await orchestrator.parse(body.message, body.conversation_id)
+    return ParseResponse(intent=intent, task=task)
+
+
+@app.post("/api/models/recommend", response_model=list[ModelRecommendation])
+def model_recommendations(task: TaskManifest) -> list[ModelRecommendation]:
+    return recommend_models(task)
+
+
+@app.get("/api/models")
+def models() -> list[ModelCard]:
+    return load_model_cards()
+
+
+@app.post("/api/parameters", status_code=201)
+def create_parameter_set(parameter_set: ParameterSet) -> ParameterSet:
+    repository.add_parameter_set(parameter_set)
+    return parameter_set
+
+
+@app.get("/api/parameters/search", response_model=list[ParameterSet])
+def search_parameters(model_name: str | None = None, components: list[str] = Query(default=[])) -> list[ParameterSet]:
+    return repository.search_parameter_sets(model_name, components)
+
+
+def execute(task: TaskManifest, request_id: str) -> CalculationEnvelope:
+    if task.original_question is None:
+        task = task.model_copy(update={"original_question": "Structured API submission"})
+    envelope = execute_task(task)
+    repository.save_run(envelope, request_id)
+    return envelope
+
+
+def _force_type(task: TaskManifest, calculation_type: str) -> TaskManifest:
+    equilibrium_type = "FLASH" if calculation_type == "tp_flash" else "VLE"
+    return task.model_copy(update={"calculation_type": calculation_type, "equilibrium_type": equilibrium_type})
+
+
+@app.post("/api/calculations/bubble-point", response_model=CalculationEnvelope)
+def bubble_point(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "bubble_point"), request.state.request_id)
+
+
+@app.post("/api/calculations/dew-point", response_model=CalculationEnvelope)
+def dew_point(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "dew_point"), request.state.request_id)
+
+
+@app.post("/api/calculations/isobaric-vle", response_model=CalculationEnvelope)
+def isobaric_vle(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "isobaric_vle"), request.state.request_id)
+
+
+@app.post("/api/calculations/isothermal-vle", response_model=CalculationEnvelope)
+def isothermal_vle(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "isothermal_vle"), request.state.request_id)
+
+
+@app.post("/api/calculations/tp-flash", response_model=CalculationEnvelope)
+def tp_flash(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "tp_flash"), request.state.request_id)
+
+
+@app.post("/api/calculations/azeotrope", response_model=CalculationEnvelope)
+def azeotrope(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(_force_type(task, "azeotrope"), request.state.request_id)
+
+
+@app.post("/api/calculations/lle", response_model=CalculationEnvelope)
+def lle(task: TaskManifest, request: Request) -> CalculationEnvelope:
+    return execute(
+        task.model_copy(update={"calculation_type": "lle", "equilibrium_type": "LLE"}),
+        request.state.request_id,
+    )
+
+
+@app.post("/api/validation", response_model=ValidationReport)
+def validation(result: CalculationResult) -> ValidationReport:
+    return validate_equilibrium_result(result)
+
+
+@app.get("/api/runs/{run_id}", response_model=RunRecord)
+def get_run(run_id: str) -> RunRecord:
+    run = repository.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    return run
+
+
+@app.get("/api/runs/{run_id}/export")
+def export_run(run_id: str, format: str = Query(default="json", pattern="^(json|csv)$")) -> Response:
+    run = repository.get_run(run_id)
+    if run is None:
+        raise HTTPException(status_code=404, detail="Run not found")
+    repository.record_export(run_id, format)
+    if format == "json":
+        content = json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2)
+        return Response(
+            content=content,
+            media_type="application/json",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.json"'},
+        )
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["temperature_K", "pressure_kPa", "x1", "y1", "equilibrium_residual"])
+    for point in run.result.get("points", []):
+        writer.writerow(
+            [
+                point["temperature_K"],
+                point["pressure_kPa"],
+                point["liquid_composition"][0],
+                point["vapor_composition"][0],
+                point["equilibrium_residual"],
+            ]
+        )
+    return Response(
+        content=output.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{run_id}.csv"'},
+    )
