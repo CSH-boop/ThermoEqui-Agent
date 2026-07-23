@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from agent.executor import execute_task
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
-from agent.providers import OpenAIProvider
+from agent.providers import DeepSeekProvider, LLMProvider, OpenAIProvider
 from agent.router import load_model_cards, recommend_models
 from database.session import Repository, initialize_database
 from schemas.domain import (
@@ -44,8 +44,18 @@ logger = logging.getLogger("thermoequi.api")
 repository = Repository()
 
 
-def configured_provider() -> DeterministicProvider | OpenAIProvider:
-    if os.getenv("LLM_PROVIDER", "deterministic").casefold() == "openai":
+def configured_provider() -> LLMProvider:
+    provider_name = os.getenv("LLM_PROVIDER", "deterministic").casefold()
+    if provider_name == "deepseek":
+        api_key = os.getenv("DEEPSEEK_API_KEY", "")
+        if api_key:
+            return DeepSeekProvider(
+                api_key=api_key,
+                model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+                base_url=os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+            )
+        logger.warning("LLM_PROVIDER=deepseek but no API key is set; using deterministic provider")
+    if provider_name == "openai":
         api_key = os.getenv("OPENAI_API_KEY", "")
         if api_key:
             return OpenAIProvider(api_key=api_key, model=os.getenv("OPENAI_MODEL", "gpt-5-mini"))

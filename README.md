@@ -75,7 +75,7 @@ docker compose up --build
 Windows PowerShell 也可使用 `Copy-Item .env.example .env`。SQLite 文件保存在命名卷中。当前开发机未安装
 Docker，因此 Compose/Dockerfile 已完成静态配置，但本次交付无法在该主机执行容器烟雾测试。
 
-## LLM 与 Mock 模式
+## LLM 与确定性模式
 
 默认 `.env.example` 使用：
 
@@ -84,7 +84,23 @@ LLM_PROVIDER=deterministic
 OPENAI_API_KEY=
 ```
 
-该模式不访问外部模型，知识问答、任务解析、表单计算和多轮改压均可演示。启用 OpenAI：
+该模式不访问外部模型，知识问答、任务解析、表单计算和多轮改压均可演示。
+
+启用 DeepSeek（PowerShell）：
+
+```powershell
+$env:LLM_PROVIDER="deepseek"
+$env:DEEPSEEK_API_KEY="<your DeepSeek API key>"
+$env:DEEPSEEK_MODEL="deepseek-v4-flash"
+$env:DEEPSEEK_BASE_URL="https://api.deepseek.com"
+python -m uvicorn apps.api.main:app --reload --port 8000
+```
+
+DeepSeek 调用集中在 `agent/providers.py`，使用官方兼容的
+`POST https://api.deepseek.com/chat/completions`。API Key 只从环境变量读取，不写入仓库、日志或前端。
+当前默认模型使用 `deepseek-v4-flash`；`deepseek-chat` 和 `deepseek-reasoner` 是即将停用的兼容别名。
+
+启用 OpenAI：
 
 ```text
 LLM_PROVIDER=openai
@@ -92,8 +108,9 @@ OPENAI_API_KEY=
 OPENAI_MODEL=gpt-5-mini
 ```
 
-所有 OpenAI 调用集中在 `agent/providers.py` 的 Responses API Adapter 中。若配置 `openai` 但 Key 为空，
-系统会安全回退到确定性 Provider；Key 不写日志、不返回前端。
+所有外部模型调用都集中在 `agent/providers.py`。若配置 `openai` 或 `deepseek` 但对应 Key 为空，
+系统会安全回退到确定性 Provider；Key 不写日志、不返回前端。无论选择哪个 Provider，热力学数值
+始终来自 `thermo_engine`。
 
 ## 测试与静态检查
 
