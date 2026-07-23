@@ -18,7 +18,11 @@ from schemas.domain import (
     ThermodynamicConditions,
 )
 from thermo_engine.errors import ThermoEquiError
-from thermo_engine.identity import resolve_literal_components
+from thermo_engine.identity import (
+    has_chemical_role_evidence,
+    is_electrolyte_identity,
+    resolve_literal_components,
+)
 from thermo_engine.units import pressure_to_kpa, temperature_to_kelvin
 
 COMPONENT_PATTERNS = (
@@ -74,38 +78,37 @@ def _mentioned_components(message: str) -> list[ComponentIdentity]:
     return [component for _, _, component in selected]
 
 
-def _token_position(message: str, token: str) -> int | None:
+def _token_span(message: str, token: str) -> tuple[int, int] | None:
     normalized = token.casefold()
     escaped = re.escape(normalized)
     pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])" if normalized.isascii() else escaped
     match = re.search(pattern, message.casefold())
-    return match.start() if match is not None else None
+    return (match.start(), match.end()) if match is not None else None
 
 
-def _component_role_is_ambiguous(message: str, position: int) -> bool:
+def _component_role_is_ambiguous(message: str, start: int, end: int) -> bool:
     lower = message.casefold()
-    if any(
-        marker in lower
-        for marker in (
-            " compare ",
-            " compared ",
-            " versus ",
-            " vs ",
-            "difference between",
-            "比较",
-            "对比",
-            "区别",
-        )
+    if re.search(r"\b(?:compare|compared|versus|vs)\b|\bdifference\s+between\b", lower) or any(
+        marker in lower for marker in ("比较", "对比", "区别")
     ):
         return True
-    prefix = lower[max(0, position - 32) : position]
-    return bool(
-        re.search(
-            r"(?:without|excluding|exclude|except|not|such as|example of|e\.g\.|"
-            r"不含|排除|不要|不包括|例如|比如)\s*$",
-            prefix,
-        )
+    prefix = lower[max(0, start - 64) : start]
+    suffix = lower[end : min(len(lower), end + 64)]
+    prefix_is_ambiguous = re.search(
+        r"(?:without|excluding|exclude|except|do\s+not\s+(?:include|add|use)|"
+        r"not\s+(?:include|add|use)|with\s+no|no|instead\s+of|rather\s+than|"
+        r"but\s+not|free\s+of|such\s+as|for\s+example|example\s+of|e\.g\.|"
+        r"不含|排除|不要|不包括|例如|比如)"
+        r"(?:[\s,]+(?:any|added?|adding|using|including|trace|of|the|component|compound)){0,4}"
+        r"[\s,;:]*$",
+        prefix,
     )
+    suffix_is_ambiguous = re.match(
+        r"(?:\s*-\s*free\b|\s+(?:should\s+be\s+)?(?:excluded|omitted|removed)\b|"
+        r"\s*,?\s*(?:for\s+example|e\.g\.)\b)",
+        suffix,
+    )
+    return prefix_is_ambiguous is not None or suffix_is_ambiguous is not None
 
 
 def _requested_components(message: str) -> list[ComponentIdentity]:
@@ -113,22 +116,47 @@ def _requested_components(message: str) -> list[ComponentIdentity]:
     for component in _mentioned_components(message):
         if component.cas_number is None:
             continue
-        positions = [
-            position
+        spans = [
+            span
             for token in (component.name, *component.aliases, component.cas_number)
-            if (position := _token_position(message, token)) is not None
+            if (span := _token_span(message, token)) is not None
         ]
-        if positions:
-            position = min(positions)
-            if _component_role_is_ambiguous(message, position):
+        if spans:
+            position, end = min(spans)
+            if _component_role_is_ambiguous(message, position, end):
                 raise LLMProviderOutputError("The component role is ambiguous and requires clarification.")
+            if not has_chemical_role_evidence(message, position, end):
+                continue
             by_cas[component.cas_number] = (position, component)
     for position, component in resolve_literal_components(message):
-        if _component_role_is_ambiguous(message, position):
+        literal = component.aliases[0] if component.aliases else component.name
+        if _component_role_is_ambiguous(message, position, position + len(literal)):
             raise LLMProviderOutputError("The component role is ambiguous and requires clarification.")
         if component.cas_number is not None:
             by_cas.setdefault(component.cas_number, (position, component))
     return [component for _, component in sorted(by_cas.values(), key=lambda item: item[0])]
+
+
+def _has_positive_scope_marker(message: str, markers: tuple[str, ...]) -> bool:
+    lower = message.casefold()
+    for marker in markers:
+        escaped = re.escape(marker.casefold())
+        if marker.isascii():
+            pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])"
+        else:
+            pattern = escaped
+        for match in re.finditer(pattern, lower):
+            prefix = lower[max(0, match.start() - 40) : match.start()]
+            suffix = lower[match.end() : min(len(lower), match.end() + 16)]
+            negated_before = re.search(
+                r"(?:(?:without|excluding|exclude|free\s+of|no)"
+                r"(?:\s+(?:any|added?)){0,2}|non[-\s]?|不含|无|非)\s*$",
+                prefix,
+            )
+            negated_after = re.match(r"\s*-\s*free\b", suffix)
+            if negated_before is None and negated_after is None:
+                return True
+    return False
 
 
 @dataclass
@@ -146,6 +174,13 @@ class DeterministicProvider:
             "氯化钠",
             "电解质",
             "nacl",
+            "salt",
+            "brine",
+            "saltwater",
+            "sodium chloride",
+            "ionic mixture",
+            "盐",
+            "离子体系",
             "sle",
             "固液",
             "v lle",
@@ -170,7 +205,10 @@ class DeterministicProvider:
             "反应相平衡",
             "reactive equilibrium",
         )
-        if any(word in lower for word in excluded_markers):
+        resolved_electrolyte = any(
+            is_electrolyte_identity(component) for _, component in resolve_literal_components(message)
+        )
+        if _has_positive_scope_marker(lower, excluded_markers) or resolved_electrolyte:
             return Intent.UNSUPPORTED_TASK
         if any(word in lower for word in ("改为", "改成", "再算", "change", "rerun")):
             return Intent.TASK_CORRECTION
@@ -192,7 +230,7 @@ class DeterministicProvider:
 
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         lower = message.casefold()
-        component_list = _mentioned_components(message)
+        component_list = _requested_components(message)
         pressure, pressure_assumption = self._pressure(message)
         temperature = self._temperature(message)
         if previous and any(word in lower for word in ("改为", "改成", "再算", "change", "rerun")):
@@ -456,10 +494,13 @@ class ConversationOrchestrator:
             )
 
     async def _classify_intent(self, message: str) -> Intent:
+        deterministic_intent = await DeterministicProvider().classify_intent(message)
+        if deterministic_intent == Intent.UNSUPPORTED_TASK:
+            return deterministic_intent
         try:
             return await self.provider.classify_intent(message)
         except LLMProviderOutputError:
-            return await DeterministicProvider().classify_intent(message)
+            return deterministic_intent
 
     @classmethod
     def _prepare_task(

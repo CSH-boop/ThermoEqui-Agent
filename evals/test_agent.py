@@ -65,6 +65,68 @@ async def test_component_grounding_finds_explicit_ethane_after_methane() -> None
 
 
 @pytest.mark.asyncio
+async def test_component_grounding_prefers_complete_multiword_identity() -> None:
+    _, task = await ConversationOrchestrator().parse("Calculate carbon dioxide and methane VLE at 100 kPa")
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == [
+        "124-38-9",
+        "74-82-8",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_component_grounding_does_not_resolve_command_grammar_as_a_chemical() -> None:
+    _, task = await ConversationOrchestrator().parse("Use PR for propane VLE at 100 kPa")
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == ["74-98-6"]
+
+
+@pytest.mark.asyncio
+async def test_component_grounding_requires_chemical_role_evidence_for_homonyms() -> None:
+    _, task = await ConversationOrchestrator().parse("Calculate methane VLE at 100 kPa; changes can lead to a result.")
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == ["74-82-8"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate methane VLE at 100 kPa with lead time recorded.",
+        "Calculate methane VLE at 100 kPa with water usage recorded.",
+        "Calculate methane and lead time effects for VLE at 100 kPa.",
+        "Calculate methane and water usage effects for VLE at 100 kPa.",
+        "Calculate methane VLE at 100 kPa and compute lead time.",
+        "Calculate methane VLE at 100 kPa and compute iron losses.",
+    ],
+)
+async def test_component_grounding_applies_role_evidence_to_all_identities(message: str) -> None:
+    _, task = await ConversationOrchestrator().parse(message)
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == ["74-82-8"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate the VLE for methane and ethane.",
+        "Calculate a TP Flash for methane and ethane.",
+        "Calculate VLE for benzene and toluene.",
+    ],
+)
+async def test_component_grounding_applies_scoped_role_to_a_complete_list(message: str) -> None:
+    _, task = await ConversationOrchestrator().parse(message)
+
+    assert task is not None
+    assert len(task.components) == 2
+
+
+@pytest.mark.asyncio
 async def test_followup_pressure_change_inherits_system_and_creates_new_run() -> None:
     orchestrator = ConversationOrchestrator()
     first = await orchestrator.chat("计算苯-甲苯常压VLE")
@@ -98,6 +160,102 @@ async def test_electrolyte_task_is_refused_without_solver() -> None:
     assert response.intent == "UNSUPPORTED_TASK"
     assert response.calculation is None
     assert response.statements[0].category == "Warning"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate salt VLE at 100 kPa",
+        "Calculate potassium chloride VLE at 100 kPa",
+        "Calculate KCl VLE at 100 kPa",
+        "Calculate sodium acetate VLE at 100 kPa",
+        "Calculate ammonium bicarbonate VLE at 100 kPa",
+        "Calculate hydrochloric acid VLE at 100 kPa",
+        "Calculate copper sulfate VLE at 100 kPa",
+        "Calculate tetramethylammonium chloride VLE at 100 kPa",
+        "Calculate choline chloride VLE at 100 kPa",
+        "Calculate phosphonium chloride VLE at 100 kPa",
+        "Calculate tetrabutylammonium bromide VLE at 100 kPa",
+        "Calculate brine VLE at 100 kPa",
+        "Calculate saltwater VLE at 100 kPa",
+    ],
+)
+async def test_generic_salt_task_is_refused_as_electrolyte_scope(message: str) -> None:
+    response = await ConversationOrchestrator().chat(message)
+
+    assert response.intent == "UNSUPPORTED_TASK"
+    assert response.task is None
+    assert response.calculation is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate ferrocene VLE at 100 kPa",
+        "Calculate tetraethyllead VLE at 100 kPa",
+        "Calculate nickel tetracarbonyl VLE at 100 kPa",
+    ],
+)
+async def test_neutral_organometallic_is_not_misclassified_as_electrolyte(message: str) -> None:
+    response = await ConversationOrchestrator().chat(message)
+
+    assert response.intent != "UNSUPPORTED_TASK"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("message", "expected_cas"),
+    [
+        (
+            "Calculate benzene/toluene VLE without salt at 100 kPa.",
+            ["71-43-2", "108-88-3"],
+        ),
+        (
+            "Calculate salt-free acetone/water VLE at 100 kPa.",
+            ["67-64-1", "7732-18-5"],
+        ),
+        (
+            "Calculate a non-ionic methane/ethane VLE at 100 kPa.",
+            ["74-82-8", "74-84-0"],
+        ),
+        (
+            "Calculate benzene/toluene VLE without potassium chloride at 100 kPa.",
+            ["71-43-2", "108-88-3"],
+        ),
+        (
+            "Calculate benzene/toluene VLE without 7447-40-7 at 100 kPa.",
+            ["71-43-2", "108-88-3"],
+        ),
+        (
+            "Calculate brine-free benzene/toluene VLE at 100 kPa.",
+            ["71-43-2", "108-88-3"],
+        ),
+        (
+            "Calculate saltwater-free benzene/toluene VLE at 100 kPa.",
+            ["71-43-2", "108-88-3"],
+        ),
+    ],
+)
+async def test_negated_excluded_scope_term_does_not_reject_supported_task(
+    message: str,
+    expected_cas: list[str],
+) -> None:
+    response = await ConversationOrchestrator().chat(message)
+
+    assert response.intent != "UNSUPPORTED_TASK"
+    assert response.task is not None
+    assert [component.cas_number for component in response.task.components] == expected_cas
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("generic_name", ["alcohol", "spirit", "ether"])
+async def test_generic_chemical_class_is_not_bound_to_an_arbitrary_compound(generic_name: str) -> None:
+    response = await ConversationOrchestrator().chat(f"Calculate {generic_name} VLE at 100 kPa")
+
+    assert response.task is None
+    assert response.calculation is None
 
 
 @pytest.mark.asyncio

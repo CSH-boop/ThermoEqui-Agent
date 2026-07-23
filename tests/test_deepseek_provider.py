@@ -103,6 +103,30 @@ def test_api_configuration_without_deepseek_key_falls_back_safely(monkeypatch: p
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate salt VLE at 100 kPa",
+        "Calculate potassium chloride VLE at 100 kPa",
+    ],
+)
+async def test_scope_rejection_precedes_external_provider_classification(message: str) -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        raise AssertionError("Excluded electrolyte tasks must not reach DeepSeek.")
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    response = await ConversationOrchestrator(provider).chat(message)
+
+    assert response.intent == "UNSUPPORTED_TASK"
+    assert response.task is None
+    assert response.calculation is None
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None:
     captured_payload: dict[str, object] = {}
     manifest = {
@@ -399,7 +423,27 @@ async def test_deepseek_cannot_omit_external_component_from_mixed_system() -> No
 
 
 @pytest.mark.asyncio
-async def test_deepseek_requires_clarification_for_negated_component_role() -> None:
+@pytest.mark.parametrize(
+    "message",
+    [
+        "Calculate acetone TP Flash at 300 K and 100 kPa without ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa without any ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa without adding ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa excluding any ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; do not include ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; do not add ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; do not use ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa with no added ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa without any trace of ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa free of ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; for example, ethanol.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; ethanol, for example.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; ethanol should be excluded.",
+        "Calculate acetone TP Flash at 300 K and 100 kPa; ethanol-free.",
+        "Compare acetone and ethanol in a TP Flash at 300 K and 100 kPa.",
+    ],
+)
+async def test_deepseek_requires_clarification_for_ambiguous_component_role(message: str) -> None:
     responses = [
         "EQUILIBRIUM_CALCULATION",
         json.dumps(
@@ -433,8 +477,107 @@ async def test_deepseek_requires_clarification_for_negated_component_role() -> N
     )
 
     with pytest.raises(LLMProviderOutputError):
-        await ConversationOrchestrator(provider).chat(
-            "Calculate acetone TP Flash at 300 K and 100 kPa without ethanol."
+        await ConversationOrchestrator(provider).chat(message)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("literal", "canonical_name", "cas_number"),
+    [
+        ("2-propanol", "Isopropanol", "67-63-0"),
+        ("isopropyl alcohol", "Isopropanol", "67-63-0"),
+        ("ethyl alcohol", "Ethanol", "64-17-5"),
+        ("n-hexane", "Hexane", "110-54-3"),
+        ("R134a", "Norflurane", "811-97-2"),
+    ],
+)
+async def test_deepseek_accepts_database_verified_component_aliases(
+    literal: str,
+    canonical_name: str,
+    cas_number: str,
+) -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "VLE",
+                "calculation_type": "BUBBLE_POINT",
+                "components": [
+                    {
+                        "component_id": cas_number,
+                        "name": literal,
+                        "cas_number": cas_number,
+                    }
+                ],
+                "conditions": {
+                    "pressure_kPa": 101.325,
+                    "liquid_composition": [1.0],
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    _, task = await ConversationOrchestrator(provider).parse(f"Calculate the bubble point of {literal} at 101.325 kPa.")
+
+    assert task is not None
+    assert task.components[0].name == canonical_name
+    assert task.components[0].cas_number == cas_number
+
+
+@pytest.mark.asyncio
+async def test_deepseek_cannot_omit_middle_component_from_comma_separated_list() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [
+                    {"component_id": "acetone", "name": "Acetone", "cas_number": "67-64-1"},
+                    {
+                        "component_id": "2-propanol",
+                        "name": "2-Propanol",
+                        "cas_number": "67-63-0",
+                    },
+                ],
+                "conditions": {
+                    "temperature_K": 300.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [0.5, 0.5],
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).parse(
+            "Calculate acetone, ethanol, and 2-propanol TP Flash at 300 K and 100 kPa."
         )
 
 
