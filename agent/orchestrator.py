@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from uuid import uuid4
 
 from agent.executor import execute_task
-from agent.providers import LLMProvider
+from agent.providers import LLMProvider, LLMProviderOutputError
 from schemas.domain import (
     ChatResponse,
     ComponentIdentity,
@@ -192,7 +192,7 @@ class ConversationOrchestrator:
         self.states: dict[str, ConversationState] = {}
 
     async def parse(self, message: str, conversation_id: str | None = None) -> tuple[Intent, TaskManifest | None]:
-        intent = await self.provider.classify_intent(message)
+        intent = await self._classify_intent(message)
         state = self.states.get(conversation_id or "")
         task = await self.provider.formulate_task(message, state.task if state else None)
         return intent, task
@@ -200,7 +200,7 @@ class ConversationOrchestrator:
     async def chat(self, message: str, conversation_id: str | None = None) -> ChatResponse:
         conversation_id = conversation_id or str(uuid4())
         state = self.states.setdefault(conversation_id, ConversationState())
-        intent = await self.provider.classify_intent(message)
+        intent = await self._classify_intent(message)
         if intent == Intent.UNSUPPORTED_TASK:
             return ChatResponse(
                 conversation_id=conversation_id,
@@ -278,6 +278,12 @@ class ConversationOrchestrator:
                 statements=[EvidenceStatement(category="Warning", text=error.detail.recovery_action)],
                 task=task,
             )
+
+    async def _classify_intent(self, message: str) -> Intent:
+        try:
+            return await self.provider.classify_intent(message)
+        except LLMProviderOutputError:
+            return await DeterministicProvider().classify_intent(message)
 
     @staticmethod
     def _missing_conditions(task: TaskManifest) -> list[str]:

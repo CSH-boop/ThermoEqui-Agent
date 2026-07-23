@@ -40,19 +40,45 @@ async def test_deepseek_provider_classifies_intent_through_chat_completions() ->
     assert intent == Intent.MODEL_SELECTION_QA
     assert captured["url"] == "https://api.deepseek.com/chat/completions"
     assert captured["authorization"] == "Bearer test-key"
-    assert captured["payload"] == {
-        "model": "deepseek-v4-flash",
-        "messages": [
-            {
-                "role": "system",
-                "content": "Return exactly one supported ThermoEqui intent enum value. Do not calculate numbers.",
-            },
-            {"role": "user", "content": "NRTL 和 Peng-Robinson 有什么区别？"},
-        ],
-        "stream": False,
-        "thinking": {"type": "disabled"},
-        "max_tokens": 32,
+    payload = captured["payload"]
+    assert isinstance(payload, dict)
+    assert payload["model"] == "deepseek-v4-flash"
+    assert payload["messages"][1] == {  # type: ignore[index]
+        "role": "user",
+        "content": "NRTL 和 Peng-Robinson 有什么区别？",
     }
+    system_prompt = payload["messages"][0]["content"]  # type: ignore[index]
+    assert all(intent_value.value in system_prompt for intent_value in Intent)
+    assert "Never return NONE" in system_prompt
+    assert payload["stream"] is False
+    assert payload["thinking"] == {"type": "disabled"}
+    assert payload["max_tokens"] == 32
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_normalizes_json_fenced_intent() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": '```json\n{"intent":"MODEL_SELECTION_QA"}\n```',
+                        }
+                    }
+                ]
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    intent = await provider.classify_intent("NRTL 和 Peng-Robinson 有什么区别？")
+
+    assert intent == Intent.MODEL_SELECTION_QA
 
 
 def test_api_configuration_selects_deepseek_provider(monkeypatch: pytest.MonkeyPatch) -> None:

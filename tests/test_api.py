@@ -136,3 +136,59 @@ def test_deepseek_failure_returns_sanitized_gateway_error(monkeypatch: pytest.Mo
     assert response.json()["error"]["code"] == "external_llm_provider_error"
     assert "test-key" not in response.text
     assert "server-secret-detail" not in response.text
+
+
+def test_invalid_deepseek_intent_falls_back_to_deterministic_classification(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        "NONE",
+        "NRTL 是液相活度系数模型；Peng-Robinson 是立方状态方程。",
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post("/api/chat", json={"message": "NRTL和Peng-Robinson有什么区别？"})
+
+    assert response.status_code == 200
+    assert response.json()["intent"] == "MODEL_SELECTION_QA"
+    assert request_count == 2
+
+
+def test_unparseable_deepseek_task_is_reported_as_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        "not-a-task-manifest",
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post("/api/chat", json={"message": "计算苯-甲苯的T-x-y曲线"})
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "external_llm_output_error"
+    assert "not-a-task-manifest" not in response.text

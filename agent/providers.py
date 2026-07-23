@@ -7,7 +7,7 @@ import re
 from typing import Protocol
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from schemas.domain import EvidenceStatement, Intent, TaskManifest
 
@@ -32,6 +32,10 @@ class LLMProviderError(RuntimeError):
         super().__init__(f"{provider} API request failed{detail}.")
 
 
+class LLMProviderOutputError(RuntimeError):
+    """External provider returned content that violates the expected contract."""
+
+
 _NUMERIC_TOKEN = re.compile(r"(?<![\w.])[-+]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][-+]?\d+)?(?![\w.])")
 _EXTERNAL_REFERENCE = re.compile(
     r"https?://|doi\s*:|10\.\d{4,9}/|NIST|Chemistry WebBook|according to|"
@@ -39,6 +43,13 @@ _EXTERNAL_REFERENCE = re.compile(
     re.IGNORECASE,
 )
 _WITHHELD_TEXT = "外部模型输出因包含未经确定性工具证实的数值或引用而被扣留。"
+_INTENT_VALUES = tuple(intent.value for intent in Intent)
+_INTENT_INSTRUCTIONS = (
+    "Classify the user message as exactly one ThermoEqui intent. "
+    f"Allowed values: {', '.join(_INTENT_VALUES)}. "
+    "Return only the enum value with no prose, Markdown, or JSON. Never return NONE."
+)
+_FENCED_VALUE = re.compile(r"^```(?:json|text)?\s*(.*?)\s*```$", re.IGNORECASE | re.DOTALL)
 
 
 class _OpenAIContentPart(BaseModel):
@@ -72,6 +83,25 @@ def _contains_ungrounded_claim(text: str) -> bool:
     return bool(_NUMERIC_TOKEN.search(text))
 
 
+def _normalize_intent_value(raw_value: str) -> str:
+    value = raw_value.strip()
+    fenced = _FENCED_VALUE.fullmatch(value)
+    if fenced:
+        value = fenced.group(1).strip()
+    try:
+        decoded = json.loads(value)
+    except json.JSONDecodeError:
+        decoded = value
+    if isinstance(decoded, dict):
+        decoded = decoded.get("intent")
+    if not isinstance(decoded, str):
+        raise LLMProviderOutputError("External provider returned an invalid intent value.")
+    match = re.fullmatch(r"(?:intent\s*[:=]\s*)?['\"]?([A-Za-z_]+)['\"]?", decoded.strip(), re.IGNORECASE)
+    if match is None:
+        raise LLMProviderOutputError("External provider returned an invalid intent value.")
+    return match.group(1).upper()
+
+
 class ConstrainedLLMProvider:
     """Shared orchestration behavior; subclasses implement only their HTTP transport."""
 
@@ -87,11 +117,14 @@ class ConstrainedLLMProvider:
 
     async def classify_intent(self, message: str) -> Intent:
         value = await self._request(
-            "Return exactly one supported ThermoEqui intent enum value. Do not calculate numbers.",
+            _INTENT_INSTRUCTIONS,
             message,
             max_tokens=32,
         )
-        return Intent(value.strip())
+        try:
+            return Intent(_normalize_intent_value(value))
+        except ValueError:
+            raise LLMProviderOutputError("External provider returned an invalid intent value.") from None
 
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         context = previous.model_dump_json() if previous else "null"
@@ -102,7 +135,12 @@ class ConstrainedLLMProvider:
             json_mode=True,
             max_tokens=2048,
         )
-        return None if value.strip() == "null" else TaskManifest.model_validate_json(value)
+        if value.strip() == "null":
+            return None
+        try:
+            return TaskManifest.model_validate_json(value)
+        except ValidationError:
+            raise LLMProviderOutputError("External provider returned an invalid task manifest.") from None
 
     async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
         value = await self._request(

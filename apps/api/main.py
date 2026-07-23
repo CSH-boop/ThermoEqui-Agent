@@ -19,7 +19,13 @@ from pydantic import BaseModel
 
 from agent.executor import execute_task
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
-from agent.providers import DeepSeekProvider, LLMProvider, LLMProviderError, OpenAIProvider
+from agent.providers import (
+    DeepSeekProvider,
+    LLMProvider,
+    LLMProviderError,
+    LLMProviderOutputError,
+    OpenAIProvider,
+)
 from agent.router import load_model_cards, recommend_models
 from database.session import Repository, initialize_database
 from schemas.domain import (
@@ -115,6 +121,18 @@ async def llm_provider_error(request: Request, exc: LLMProviderError) -> JSONRes
             code="external_llm_provider_error",
             message=str(exc),
             details={"provider": exc.provider, "upstream_status": exc.status_code},
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=502, content=payload.model_dump(mode="json"))
+
+
+@app.exception_handler(LLMProviderOutputError)
+async def llm_provider_output_error(request: Request, exc: LLMProviderOutputError) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code="external_llm_output_error",
+            message=str(exc),
             request_id=request.state.request_id,
         )
     )
