@@ -331,6 +331,40 @@ async def test_deepseek_new_task_requires_component_identity_evidence() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deepseek_component_name_cannot_carry_another_compounds_cas() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "VLE",
+                "calculation_type": "BUBBLE_POINT",
+                "components": [{"component_id": "acetone", "name": "Acetone", "cas_number": "71-43-2"}],
+                "conditions": {
+                    "pressure_kPa": 101.325,
+                    "liquid_composition": [1.0],
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).chat("Calculate the acetone bubble point at 101.325 kPa.")
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(

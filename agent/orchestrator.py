@@ -18,6 +18,7 @@ from schemas.domain import (
     ThermodynamicConditions,
 )
 from thermo_engine.errors import ThermoEquiError
+from thermo_engine.identity import resolve_external_component
 from thermo_engine.units import pressure_to_kpa, temperature_to_kelvin
 
 COMPONENT_PATTERNS = (
@@ -440,19 +441,30 @@ class ConversationOrchestrator:
             expected_components = mentioned
         else:
             positioned_components: list[tuple[int, ComponentIdentity]] = []
-            for component in task.components:
+            for provider_component in task.components:
                 tokens = [
-                    component.name,
-                    component.component_id,
-                    *component.aliases,
-                    *([component.cas_number] if component.cas_number else []),
+                    provider_component.name,
+                    *([provider_component.cas_number] if provider_component.cas_number else []),
                 ]
-                positions = [position for token in tokens if (position := _token_position(message, token)) is not None]
-                if not positions:
+                grounded_candidates: list[tuple[int, ComponentIdentity]] = []
+                for token in tokens:
+                    position = _token_position(message, token)
+                    if position is None:
+                        continue
+                    resolved = resolve_external_component(token)
+                    if resolved is None:
+                        continue
+                    if (
+                        provider_component.cas_number is not None
+                        and resolved.cas_number != provider_component.cas_number
+                    ):
+                        raise LLMProviderOutputError("External provider returned a component name/CAS mismatch.")
+                    grounded_candidates.append((position, resolved))
+                if not grounded_candidates:
                     raise LLMProviderOutputError(
                         "External provider returned a component without deterministic identity evidence."
                     )
-                positioned_components.append((min(positions), component))
+                positioned_components.append(min(grounded_candidates, key=lambda item: item[0]))
             expected_components = [
                 component for _, component in sorted(positioned_components, key=lambda item: item[0])
             ]
