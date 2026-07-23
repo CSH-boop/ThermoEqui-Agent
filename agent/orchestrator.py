@@ -43,13 +43,14 @@ def _mentioned_components(message: str) -> list[ComponentIdentity]:
             cas_number=cas_number,
         )
         for alias in aliases:
-            position = lower.find(alias)
-            if position >= 0:
+            escaped = re.escape(alias)
+            pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])" if alias.isascii() else escaped
+            for match in re.finditer(pattern, lower):
                 candidates.append(
                     (
-                        position,
+                        match.start(),
                         -len(alias),
-                        position + len(alias),
+                        match.end(),
                         component,
                     )
                 )
@@ -262,8 +263,11 @@ class ConversationOrchestrator:
         state = self.states.get(conversation_id or "")
         task = await self.provider.formulate_task(message, state.task if state else None)
         if task is not None:
-            task = self._ground_task_components(message, task)
-            task = task.model_copy(update={"original_question": message})
+            task = self._prepare_task(
+                message,
+                task,
+                allow_inherited_components=state is not None and intent == Intent.TASK_CORRECTION,
+            )
         return intent, task
 
     async def chat(self, message: str, conversation_id: str | None = None) -> ChatResponse:
@@ -310,8 +314,11 @@ class ConversationOrchestrator:
                 answer="缺少可识别的组分，尚未执行计算。",
                 statements=[EvidenceStatement(category="Warning", text="需要明确组分身份。")],
             )
-        task = self._ground_task_components(message, task)
-        task = task.model_copy(update={"original_question": message})
+        task = self._prepare_task(
+            message,
+            task,
+            allow_inherited_components=state.task is not None and intent == Intent.TASK_CORRECTION,
+        )
         state.task = task
         required_missing = self._missing_conditions(task)
         if required_missing:
@@ -395,18 +402,88 @@ class ConversationOrchestrator:
         except LLMProviderOutputError:
             return await DeterministicProvider().classify_intent(message)
 
+    @classmethod
+    def _prepare_task(
+        cls,
+        message: str,
+        task: TaskManifest,
+        *,
+        allow_inherited_components: bool,
+    ) -> TaskManifest:
+        grounded = cls._ground_task_components(
+            message,
+            task,
+            allow_inherited_components=allow_inherited_components,
+        )
+        return grounded.model_copy(update={"original_question": message})
+
     @staticmethod
-    def _ground_task_components(message: str, task: TaskManifest) -> TaskManifest:
+    def _ground_task_components(
+        message: str,
+        task: TaskManifest,
+        *,
+        allow_inherited_components: bool,
+    ) -> TaskManifest:
         mentioned = _mentioned_components(message)
         if not mentioned:
             return task
-        mentioned_ids = {component.cas_number for component in mentioned}
-        task_ids = {component.cas_number for component in task.components}
-        if len(mentioned) == len(task.components):
-            return task.model_copy(update={"components": mentioned})
-        if not mentioned_ids.issubset(task_ids):
+        mentioned_by_cas = {
+            component.cas_number: component for component in mentioned if component.cas_number is not None
+        }
+        provider_order: list[str] = []
+        for provider_component in task.components:
+            provider_tokens = {
+                provider_component.component_id.casefold(),
+                provider_component.name.casefold(),
+                *(alias.casefold() for alias in provider_component.aliases),
+                *([provider_component.cas_number] if provider_component.cas_number else []),
+            }
+            matches = [
+                cas_number
+                for cas_number, canonical in mentioned_by_cas.items()
+                if cas_number in provider_tokens
+                or canonical.component_id.casefold() in provider_tokens
+                or canonical.name.casefold() in provider_tokens
+            ]
+            if len(matches) != 1:
+                if allow_inherited_components:
+                    mentioned_ids = set(mentioned_by_cas)
+                    task_ids = {component.cas_number for component in task.components}
+                    if mentioned_ids.issubset(task_ids):
+                        return task
+                raise LLMProviderOutputError(
+                    "External provider returned components inconsistent with the user message."
+                )
+            provider_order.append(matches[0])
+        mentioned_order = [component.cas_number for component in mentioned if component.cas_number is not None]
+        if (
+            len(provider_order) != len(mentioned_order)
+            or len(set(provider_order)) != len(provider_order)
+            or set(provider_order) != set(mentioned_order)
+        ):
+            if allow_inherited_components and set(mentioned_order).issubset(provider_order):
+                return task
             raise LLMProviderOutputError("External provider returned components inconsistent with the user message.")
-        return task
+        permutation = [provider_order.index(cas_number) for cas_number in mentioned_order]
+        condition_updates: dict[str, list[float]] = {}
+        for field_name in (
+            "feed_composition",
+            "liquid_composition",
+            "vapor_composition",
+        ):
+            values = getattr(task.conditions, field_name)
+            if values is None:
+                continue
+            if len(values) != len(provider_order):
+                raise LLMProviderOutputError("External provider returned a composition with the wrong component count.")
+            condition_updates[field_name] = [values[index] for index in permutation]
+        conditions = task.conditions.model_copy(update=condition_updates)
+        return task.model_copy(
+            update={
+                "components": mentioned,
+                "conditions": conditions,
+            }
+        )
 
     @staticmethod
     def _missing_conditions(task: TaskManifest) -> list[str]:

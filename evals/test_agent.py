@@ -53,6 +53,18 @@ async def test_component_grounding_does_not_match_benzene_inside_toluene() -> No
 
 
 @pytest.mark.asyncio
+async def test_component_grounding_finds_explicit_ethane_after_methane() -> None:
+    _, task = await ConversationOrchestrator().parse("Calculate methane, ethane and nitrogen VLE at 100 kPa")
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == [
+        "74-82-8",
+        "74-84-0",
+        "7727-37-9",
+    ]
+
+
+@pytest.mark.asyncio
 async def test_followup_pressure_change_inherits_system_and_creates_new_run() -> None:
     orchestrator = ConversationOrchestrator()
     first = await orchestrator.chat("计算苯-甲苯常压VLE")

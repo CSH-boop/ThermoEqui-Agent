@@ -206,6 +206,43 @@ async def test_deepseek_provider_rejects_tool_outside_allowlist() -> None:
 
 
 @pytest.mark.asyncio
+async def test_deepseek_orchestration_rejects_invented_extra_component() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [
+                    {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+                    {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+                ],
+                "conditions": {
+                    "temperature_K": 150.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [0.5, 0.5],
+                },
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).chat("Calculate methane TP Flash at 150 K and 100 kPa.")
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -301,14 +338,14 @@ async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_re
         "equilibrium_type": "FLASH",
         "calculation_type": "TP_FLASH",
         "components": [
+            {"component_id": "nitrogen", "name": "Nitrogen", "cas_number": "7727-37-9"},
             {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
             {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
-            {"component_id": "propane", "name": "Propane", "cas_number": "74-98-6"},
         ],
         "conditions": {
             "temperature_K": 110.0,
             "pressure_kPa": 100.0,
-            "feed_composition": [0.965, 0.018, 0.017],
+            "feed_composition": [0.017, 0.965, 0.018],
         },
         "model_name": "Peng-Robinson",
     }
@@ -344,6 +381,7 @@ async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_re
         "74-84-0",
         "7727-37-9",
     ]
+    assert response.task.conditions.feed_composition == [0.965, 0.018, 0.017]
     assert len(response.calculation.result.phases) == 2
     assert response.calculation.result.backend_version.startswith("thermo/")
     assert response.calculation.validation.overall_status in {"passed", "warning"}

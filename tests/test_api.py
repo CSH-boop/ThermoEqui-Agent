@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 
 import httpx
@@ -142,6 +143,63 @@ def test_peng_robinson_api_returns_thermo_and_chemsep_provenance() -> None:
     assert interaction_source["parameter_set_id"] == payload["result"]["parameter_set_id"]
     recommendation = next(item for item in payload["model_recommendations"] if item["model_name"] == "Peng-Robinson")
     assert recommendation["executable"]
+
+
+def test_deepseek_chat_normalizes_tp_flash_alias_before_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP-FLASH",
+                "components": [
+                    {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+                    {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+                    {"component_id": "nitrogen", "name": "Nitrogen", "cas_number": "7727-37-9"},
+                ],
+                "conditions": {
+                    "temperature_K": 110.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [0.965, 0.018, 0.017],
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+        json.dumps({"tool_name": "phase_equilibrium"}),
+        "The deterministic result and validation payload were received.",
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post(
+            "/api/chat",
+            json={
+                "message": (
+                    "Calculate methane, ethane and nitrogen TP Flash at 110 K and 100 kPa "
+                    "with composition 0.965, 0.018, 0.017."
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["calculation_type"] == "tp_flash"
+    assert payload["calculation"]["result"]["backend_version"].startswith("thermo/")
+    assert payload["calculation"]["validation"]["material_balance"]["passed"]
 
 
 def test_request_validation_and_not_found_use_unified_error_shape() -> None:
