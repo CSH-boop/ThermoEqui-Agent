@@ -72,6 +72,14 @@ def _mentioned_components(message: str) -> list[ComponentIdentity]:
     return [component for _, _, component in selected]
 
 
+def _token_position(message: str, token: str) -> int | None:
+    normalized = token.casefold()
+    escaped = re.escape(normalized)
+    pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])" if normalized.isascii() else escaped
+    match = re.search(pattern, message.casefold())
+    return match.start() if match is not None else None
+
+
 @dataclass
 class ConversationState:
     task: TaskManifest | None = None
@@ -266,7 +274,7 @@ class ConversationOrchestrator:
             task = self._prepare_task(
                 message,
                 task,
-                allow_inherited_components=state is not None and intent == Intent.TASK_CORRECTION,
+                previous_task=state.task if state is not None and intent == Intent.TASK_CORRECTION else None,
             )
         return intent, task
 
@@ -317,7 +325,7 @@ class ConversationOrchestrator:
         task = self._prepare_task(
             message,
             task,
-            allow_inherited_components=state.task is not None and intent == Intent.TASK_CORRECTION,
+            previous_task=state.task if intent == Intent.TASK_CORRECTION else None,
         )
         state.task = task
         required_missing = self._missing_conditions(task)
@@ -408,27 +416,56 @@ class ConversationOrchestrator:
         message: str,
         task: TaskManifest,
         *,
-        allow_inherited_components: bool,
+        previous_task: TaskManifest | None,
     ) -> TaskManifest:
-        grounded = cls._ground_task_components(
-            message,
-            task,
-            allow_inherited_components=allow_inherited_components,
-        )
+        mentioned = _mentioned_components(message)
+        if previous_task is not None:
+            previous_components = previous_task.components
+            if mentioned:
+                mentioned_ids = {component.cas_number for component in mentioned}
+                previous_ids = {component.cas_number for component in previous_components}
+                if mentioned_ids == previous_ids:
+                    expected_components = mentioned
+                elif mentioned_ids.issubset(previous_ids):
+                    expected_components = previous_components
+                elif len(mentioned) == len(task.components):
+                    expected_components = mentioned
+                else:
+                    raise LLMProviderOutputError(
+                        "External provider returned components inconsistent with the correction."
+                    )
+            else:
+                expected_components = previous_components
+        elif mentioned:
+            expected_components = mentioned
+        else:
+            positioned_components: list[tuple[int, ComponentIdentity]] = []
+            for component in task.components:
+                tokens = [
+                    component.name,
+                    component.component_id,
+                    *component.aliases,
+                    *([component.cas_number] if component.cas_number else []),
+                ]
+                positions = [position for token in tokens if (position := _token_position(message, token)) is not None]
+                if not positions:
+                    raise LLMProviderOutputError(
+                        "External provider returned a component without deterministic identity evidence."
+                    )
+                positioned_components.append((min(positions), component))
+            expected_components = [
+                component for _, component in sorted(positioned_components, key=lambda item: item[0])
+            ]
+        grounded = cls._align_task_components(task, expected_components)
         return grounded.model_copy(update={"original_question": message})
 
     @staticmethod
-    def _ground_task_components(
-        message: str,
+    def _align_task_components(
         task: TaskManifest,
-        *,
-        allow_inherited_components: bool,
+        expected_components: list[ComponentIdentity],
     ) -> TaskManifest:
-        mentioned = _mentioned_components(message)
-        if not mentioned:
-            return task
-        mentioned_by_cas = {
-            component.cas_number: component for component in mentioned if component.cas_number is not None
+        expected_by_cas = {
+            component.cas_number: component for component in expected_components if component.cas_number is not None
         }
         provider_order: list[str] = []
         for provider_component in task.components:
@@ -440,31 +477,25 @@ class ConversationOrchestrator:
             }
             matches = [
                 cas_number
-                for cas_number, canonical in mentioned_by_cas.items()
+                for cas_number, canonical in expected_by_cas.items()
                 if cas_number in provider_tokens
                 or canonical.component_id.casefold() in provider_tokens
                 or canonical.name.casefold() in provider_tokens
             ]
             if len(matches) != 1:
-                if allow_inherited_components:
-                    mentioned_ids = set(mentioned_by_cas)
-                    task_ids = {component.cas_number for component in task.components}
-                    if mentioned_ids.issubset(task_ids):
-                        return task
                 raise LLMProviderOutputError(
                     "External provider returned components inconsistent with the user message."
                 )
             provider_order.append(matches[0])
-        mentioned_order = [component.cas_number for component in mentioned if component.cas_number is not None]
+        expected_order = [component.cas_number for component in expected_components if component.cas_number is not None]
         if (
-            len(provider_order) != len(mentioned_order)
+            len(expected_by_cas) != len(expected_components)
+            or len(provider_order) != len(expected_order)
             or len(set(provider_order)) != len(provider_order)
-            or set(provider_order) != set(mentioned_order)
+            or set(provider_order) != set(expected_order)
         ):
-            if allow_inherited_components and set(mentioned_order).issubset(provider_order):
-                return task
             raise LLMProviderOutputError("External provider returned components inconsistent with the user message.")
-        permutation = [provider_order.index(cas_number) for cas_number in mentioned_order]
+        permutation = [provider_order.index(cas_number) for cas_number in expected_order]
         condition_updates: dict[str, list[float]] = {}
         for field_name in (
             "feed_composition",
@@ -480,7 +511,7 @@ class ConversationOrchestrator:
         conditions = task.conditions.model_copy(update=condition_updates)
         return task.model_copy(
             update={
-                "components": mentioned,
+                "components": expected_components,
                 "conditions": conditions,
             }
         )

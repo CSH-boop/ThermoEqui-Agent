@@ -243,6 +243,94 @@ async def test_deepseek_orchestration_rejects_invented_extra_component() -> None
 
 
 @pytest.mark.asyncio
+async def test_deepseek_followup_cannot_silently_replace_inherited_components() -> None:
+    first_task = {
+        "equilibrium_type": "FLASH",
+        "calculation_type": "TP_FLASH",
+        "components": [
+            {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+            {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+        ],
+        "conditions": {
+            "temperature_K": 150.0,
+            "pressure_kPa": 100.0,
+            "feed_composition": [0.5, 0.5],
+        },
+        "model_name": "Peng-Robinson",
+    }
+    changed_task = {
+        **first_task,
+        "components": [
+            {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+            {"component_id": "propane", "name": "Propane", "cas_number": "74-98-6"},
+        ],
+        "conditions": {
+            **first_task["conditions"],
+            "pressure_kPa": 200.0,
+        },
+    }
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(first_task),
+        json.dumps({"tool_name": "phase_equilibrium"}),
+        "The deterministic result was received.",
+        "TASK_CORRECTION",
+        json.dumps(changed_task),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    orchestrator = ConversationOrchestrator(provider)
+    first = await orchestrator.chat("Calculate methane and ethane TP Flash at 150 K and 100 kPa.")
+
+    with pytest.raises(LLMProviderOutputError):
+        await orchestrator.chat("Change pressure to 200 kPa.", first.conversation_id)
+
+
+@pytest.mark.asyncio
+async def test_deepseek_new_task_requires_component_identity_evidence() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [{"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"}],
+                "conditions": {
+                    "temperature_K": 150.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [1.0],
+                },
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).chat("Calculate a TP Flash at 150 K and 100 kPa.")
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
