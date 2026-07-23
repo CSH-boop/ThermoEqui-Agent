@@ -4,10 +4,48 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any, Literal, TypeAlias
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+CalculationType: TypeAlias = Literal[
+    "bubble_point",
+    "dew_point",
+    "isobaric_vle",
+    "isothermal_vle",
+    "tp_flash",
+    "phase_stability",
+    "azeotrope",
+    "lle",
+]
+
+_CALCULATION_TYPE_ALIASES: dict[str, CalculationType] = {
+    "bubble": "bubble_point",
+    "bubblepoint": "bubble_point",
+    "bubble_point": "bubble_point",
+    "dew": "dew_point",
+    "dewpoint": "dew_point",
+    "dew_point": "dew_point",
+    "isobaric_vle": "isobaric_vle",
+    "isobaricvle": "isobaric_vle",
+    "t_x_y": "isobaric_vle",
+    "txy": "isobaric_vle",
+    "isothermal_vle": "isothermal_vle",
+    "isothermalvle": "isothermal_vle",
+    "p_x_y": "isothermal_vle",
+    "pxy": "isothermal_vle",
+    "flash": "tp_flash",
+    "tp_flash": "tp_flash",
+    "tpflash": "tp_flash",
+    "phase_stability": "phase_stability",
+    "phasestability": "phase_stability",
+    "stability": "phase_stability",
+    "azeotrope": "azeotrope",
+    "azeotrope_search": "azeotrope",
+    "liquid_liquid_equilibrium": "lle",
+    "lle": "lle",
+}
 
 
 class Intent(StrEnum):
@@ -65,7 +103,7 @@ class ThermodynamicConditions(BaseModel):
 class TaskManifest(BaseModel):
     task_id: str = Field(default_factory=lambda: str(uuid4()))
     equilibrium_type: Literal["VLE", "LLE", "FLASH"]
-    calculation_type: str
+    calculation_type: CalculationType
     components: list[ComponentIdentity] = Field(min_length=1)
     conditions: ThermodynamicConditions
     composition_basis: Literal["mole_fraction", "mass_fraction"] = "mole_fraction"
@@ -77,6 +115,14 @@ class TaskManifest(BaseModel):
     model_name: str | None = None
     points: int = Field(default=21, ge=2, le=501)
     original_question: str | None = None
+
+    @field_validator("calculation_type", mode="before")
+    @classmethod
+    def normalize_calculation_type(cls, value: object) -> object:
+        if not isinstance(value, str):
+            return value
+        normalized = value.strip().casefold().replace("-", "_").replace(" ", "_")
+        return _CALCULATION_TYPE_ALIASES.get(normalized, normalized)
 
 
 class SystemProfile(BaseModel):
@@ -143,7 +189,7 @@ class PhaseResult(BaseModel):
 class CalculationResult(BaseModel):
     run_id: str = Field(default_factory=lambda: str(uuid4()))
     task_id: str
-    calculation_type: str
+    calculation_type: CalculationType
     input_snapshot: dict[str, Any]
     model_name: str
     parameter_set_id: str | None = None

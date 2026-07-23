@@ -107,7 +107,7 @@ async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None
     captured_payload: dict[str, object] = {}
     manifest = {
         "equilibrium_type": "VLE",
-        "calculation_type": "isobaric_vle",
+        "calculation_type": "T-X-Y",
         "components": [{"component_id": "benzene", "name": "Benzene"}],
         "conditions": {"pressure_kPa": 101.325},
     }
@@ -133,9 +133,47 @@ async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None
     assert isinstance(messages, list)
     system_prompt = messages[0]["content"]
     assert '"calculation_type"' in system_prompt
+    assert '"tp_flash"' in system_prompt
     assert '"model_name"' in system_prompt
     assert "model_name may be null" in system_prompt
     assert "Never calculate equilibrium numbers" in system_prompt
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_retries_invalid_task_manifest_once() -> None:
+    responses = [
+        '{"calculation_type":"TP_FLASH"}',
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [{"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"}],
+                "conditions": {
+                    "temperature_K": 110.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [1.0],
+                },
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    task = await provider.formulate_task("计算甲烷 TP Flash")
+
+    assert task is not None
+    assert task.calculation_type == "tp_flash"
+    assert request_count == 2
 
 
 @pytest.mark.asyncio
@@ -260,14 +298,19 @@ def test_compose_forwards_deepseek_configuration_to_api() -> None:
 @pytest.mark.asyncio
 async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_result() -> None:
     task_payload = {
-        "equilibrium_type": "VLE",
-        "calculation_type": "isobaric_vle",
+        "equilibrium_type": "FLASH",
+        "calculation_type": "TP_FLASH",
         "components": [
-            {"component_id": "benzene", "name": "Benzene", "cas_number": "71-43-2"},
-            {"component_id": "toluene", "name": "Toluene", "cas_number": "108-88-3"},
+            {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+            {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+            {"component_id": "propane", "name": "Propane", "cas_number": "74-98-6"},
         ],
-        "conditions": {"pressure_kPa": 101.325},
-        "model_name": "Ideal/Raoult",
+        "conditions": {
+            "temperature_K": 110.0,
+            "pressure_kPa": 100.0,
+            "feed_composition": [0.965, 0.018, 0.017],
+        },
+        "model_name": "Peng-Robinson",
     }
     responses = [
         "EQUILIBRIUM_CALCULATION",
@@ -289,13 +332,23 @@ async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_re
         transport=httpx.MockTransport(respond),
     )
 
-    response = await ConversationOrchestrator(provider).chat("计算苯-甲苯在101.325 kPa下的T-x-y曲线")
+    response = await ConversationOrchestrator(provider).chat(
+        "使用 Peng-Robinson 计算甲烷、乙烷和氮气的 TP Flash：110 K，100 kPa，组成 0.965、0.018、0.017。"
+    )
 
     assert response.calculation is not None
-    assert len(response.calculation.result.points) == 21
+    assert response.task is not None
+    assert response.task.calculation_type == "tp_flash"
+    assert [component.cas_number for component in response.task.components] == [
+        "74-82-8",
+        "74-84-0",
+        "7727-37-9",
+    ]
+    assert len(response.calculation.result.phases) == 2
+    assert response.calculation.result.backend_version.startswith("thermo/")
     assert response.calculation.validation.overall_status in {"passed", "warning"}
     tool_selection_input = json.loads(requests[2]["messages"][1]["content"])  # type: ignore[index]
     assert tool_selection_input["available_tools"][0]["name"] == "phase_equilibrium"
     interpretation_input = json.loads(requests[3]["messages"][1]["content"])  # type: ignore[index]
-    assert len(interpretation_input["result"]["points"]) == 21
+    assert len(interpretation_input["result"]["phases"]) == 2
     assert interpretation_input["validation"]["overall_status"] in {"passed", "warning"}

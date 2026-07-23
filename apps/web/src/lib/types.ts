@@ -10,6 +10,16 @@ export type Intent =
   | "TASK_CORRECTION"
   | "UNSUPPORTED_TASK";
 
+export type CalculationType =
+  | "bubble_point"
+  | "dew_point"
+  | "isobaric_vle"
+  | "isothermal_vle"
+  | "tp_flash"
+  | "phase_stability"
+  | "azeotrope"
+  | "lle";
+
 export interface ComponentIdentity {
   component_id: string;
   name: string;
@@ -28,7 +38,7 @@ export interface Conditions {
 export interface TaskManifest {
   task_id: string;
   equilibrium_type: "VLE" | "LLE" | "FLASH";
-  calculation_type: string;
+  calculation_type: CalculationType;
   components: ComponentIdentity[];
   conditions: Conditions;
   composition_basis: "mole_fraction" | "mass_fraction";
@@ -99,7 +109,7 @@ export interface CalculationEnvelope {
   result: {
     run_id: string;
     task_id: string;
-    calculation_type: string;
+    calculation_type: CalculationType;
     input_snapshot: Record<string, unknown>;
     model_name: string;
     parameter_set_id?: string | null;

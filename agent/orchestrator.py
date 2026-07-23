@@ -23,7 +23,52 @@ from thermo_engine.units import pressure_to_kpa, temperature_to_kelvin
 COMPONENT_PATTERNS = (
     ("benzene", "Benzene", "71-43-2", ("苯", "benzene")),
     ("toluene", "Toluene", "108-88-3", ("甲苯", "toluene")),
+    ("methane", "Methane", "74-82-8", ("甲烷", "methane")),
+    ("ethane", "Ethane", "74-84-0", ("乙烷", "ethane")),
+    ("propane", "Propane", "74-98-6", ("丙烷", "propane")),
+    ("nitrogen", "Nitrogen", "7727-37-9", ("氮气", "nitrogen", "n2")),
+    ("water", "Water", "7732-18-5", ("水", "water")),
+    ("methanol", "Methanol", "67-56-1", ("甲醇", "methanol")),
+    ("carbon-dioxide", "Carbon dioxide", "124-38-9", ("二氧化碳", "carbon dioxide", "co2")),
 )
+
+
+def _mentioned_components(message: str) -> list[ComponentIdentity]:
+    lower = message.casefold()
+    candidates: list[tuple[int, int, int, ComponentIdentity]] = []
+    for component_id, name, cas_number, aliases in COMPONENT_PATTERNS:
+        component = ComponentIdentity(
+            component_id=component_id,
+            name=name,
+            cas_number=cas_number,
+        )
+        for alias in aliases:
+            position = lower.find(alias)
+            if position >= 0:
+                candidates.append(
+                    (
+                        position,
+                        -len(alias),
+                        position + len(alias),
+                        component,
+                    )
+                )
+    selected: list[tuple[int, int, ComponentIdentity]] = []
+    seen_components: set[str] = set()
+    for start, _, end, component in sorted(candidates, key=lambda item: (item[0], item[1])):
+        if component.component_id in seen_components:
+            continue
+        if any(start < selected_end and end > selected_start for selected_start, selected_end, _ in selected):
+            continue
+        selected.append(
+            (
+                start,
+                end,
+                component,
+            )
+        )
+        seen_components.add(component.component_id)
+    return [component for _, _, component in selected]
 
 
 @dataclass
@@ -87,10 +132,7 @@ class DeterministicProvider:
 
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         lower = message.casefold()
-        component_list: list[ComponentIdentity] = []
-        for component_id, name, cas, aliases in COMPONENT_PATTERNS:
-            if any(alias in lower for alias in aliases):
-                component_list.append(ComponentIdentity(component_id=component_id, name=name, cas_number=cas))
+        component_list = _mentioned_components(message)
         pressure, pressure_assumption = self._pressure(message)
         temperature = self._temperature(message)
         if previous and any(word in lower for word in ("改为", "改成", "再算", "change", "rerun")):
@@ -219,6 +261,9 @@ class ConversationOrchestrator:
         intent = await self._classify_intent(message)
         state = self.states.get(conversation_id or "")
         task = await self.provider.formulate_task(message, state.task if state else None)
+        if task is not None:
+            task = self._ground_task_components(message, task)
+            task = task.model_copy(update={"original_question": message})
         return intent, task
 
     async def chat(self, message: str, conversation_id: str | None = None) -> ChatResponse:
@@ -265,6 +310,7 @@ class ConversationOrchestrator:
                 answer="缺少可识别的组分，尚未执行计算。",
                 statements=[EvidenceStatement(category="Warning", text="需要明确组分身份。")],
             )
+        task = self._ground_task_components(message, task)
         task = task.model_copy(update={"original_question": message})
         state.task = task
         required_missing = self._missing_conditions(task)
@@ -348,6 +394,19 @@ class ConversationOrchestrator:
             return await self.provider.classify_intent(message)
         except LLMProviderOutputError:
             return await DeterministicProvider().classify_intent(message)
+
+    @staticmethod
+    def _ground_task_components(message: str, task: TaskManifest) -> TaskManifest:
+        mentioned = _mentioned_components(message)
+        if not mentioned:
+            return task
+        mentioned_ids = {component.cas_number for component in mentioned}
+        task_ids = {component.cas_number for component in task.components}
+        if len(mentioned) == len(task.components):
+            return task.model_copy(update={"components": mentioned})
+        if not mentioned_ids.issubset(task_ids):
+            raise LLMProviderOutputError("External provider returned components inconsistent with the user message.")
+        return task
 
     @staticmethod
     def _missing_conditions(task: TaskManifest) -> list[str]:

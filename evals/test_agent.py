@@ -45,6 +45,14 @@ async def test_atmospheric_pressure_is_normalized_with_assumption() -> None:
 
 
 @pytest.mark.asyncio
+async def test_component_grounding_does_not_match_benzene_inside_toluene() -> None:
+    _, task = await ConversationOrchestrator().parse("计算甲苯在常压下的泡点")
+
+    assert task is not None
+    assert [component.cas_number for component in task.components] == ["108-88-3"]
+
+
+@pytest.mark.asyncio
 async def test_followup_pressure_change_inherits_system_and_creates_new_run() -> None:
     orchestrator = ConversationOrchestrator()
     first = await orchestrator.chat("计算苯-甲苯常压VLE")

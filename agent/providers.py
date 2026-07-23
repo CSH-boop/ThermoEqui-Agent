@@ -144,22 +144,39 @@ class ConstrainedLLMProvider:
             ensure_ascii=False,
             separators=(",", ":"),
         )
-        value = await self._request(
+        instructions = (
             "Return only a TaskManifest JSON object or null. Follow the supplied JSON Schema exactly. "
             "model_name may be null so the deterministic router can select an applicable model. "
             "Never invent components, conditions, parameters, data, or citations. "
             "Never calculate equilibrium numbers; deterministic tools do that after validation. "
-            f"TaskManifest JSON Schema: {schema}. Previous manifest: {context}",
-            message,
-            json_mode=True,
-            max_tokens=2048,
+            f"TaskManifest JSON Schema: {schema}. Previous manifest: {context}"
         )
-        if value.strip() == "null":
-            return None
-        try:
-            return TaskManifest.model_validate_json(value)
-        except ValidationError:
-            raise LLMProviderOutputError("External provider returned an invalid task manifest.") from None
+        validation_fields: list[str] = []
+        for attempt in range(2):
+            retry_note = (
+                ""
+                if attempt == 0
+                else " The previous response failed validation at these fields: "
+                f"{', '.join(validation_fields)}. Return a complete corrected object."
+            )
+            value = await self._request(
+                instructions + retry_note,
+                message,
+                json_mode=True,
+                max_tokens=2048,
+            )
+            if value.strip() == "null":
+                return None
+            try:
+                return TaskManifest.model_validate_json(value)
+            except ValidationError as error:
+                validation_fields = sorted(
+                    {
+                        ".".join(str(part) for part in issue["loc"])
+                        for issue in error.errors(include_url=False, include_input=False)
+                    }
+                )
+        raise LLMProviderOutputError("External provider returned an invalid task manifest.")
 
     async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
         value = await self._request(

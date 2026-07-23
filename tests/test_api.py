@@ -214,6 +214,7 @@ def test_unparseable_deepseek_task_is_reported_as_gateway_error(monkeypatch: pyt
     responses = [
         "EQUILIBRIUM_CALCULATION",
         "not-a-task-manifest",
+        "still-not-a-task-manifest",
     ]
     request_count = 0
 
