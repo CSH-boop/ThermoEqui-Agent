@@ -257,7 +257,10 @@ class ConversationOrchestrator:
             validation = envelope.validation
             state.run_ids.append(envelope.result.run_id)
             statements = await self.provider.interpret_result(
-                {"validation_status": validation.overall_status, "run_id": result.run_id}
+                {
+                    "result": result.model_dump(mode="json"),
+                    "validation": validation.model_dump(mode="json"),
+                }
             )
             return ChatResponse(
                 conversation_id=conversation_id,

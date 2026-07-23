@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
 import apps.api.main as api_module
+from agent.orchestrator import ConversationOrchestrator
+from agent.providers import DeepSeekProvider
 from database.models import EvidenceRecordRow
 from database.session import Repository, initialize_database
 
@@ -113,3 +117,22 @@ def test_request_validation_and_not_found_use_unified_error_shape() -> None:
         missing = test_client.get("/api/runs/not-found")
         assert missing.status_code == 404
         assert missing.json()["error"]["code"] == "http_404"
+
+
+def test_deepseek_failure_returns_sanitized_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def reject(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"error": {"message": "server-secret-detail"}})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(reject),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post("/api/chat", json={"message": "解释 NRTL"})
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "external_llm_provider_error"
+    assert "test-key" not in response.text
+    assert "server-secret-detail" not in response.text

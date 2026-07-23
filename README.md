@@ -99,6 +99,8 @@ python -m uvicorn apps.api.main:app --reload --port 8000
 DeepSeek 调用集中在 `agent/providers.py`，使用官方兼容的
 `POST https://api.deepseek.com/chat/completions`。API Key 只从环境变量读取，不写入仓库、日志或前端。
 当前默认模型使用 `deepseek-v4-flash`；`deepseek-chat` 和 `deepseek-reasoner` 是即将停用的兼容别名。
+启动后访问 `http://localhost:8000/health`，确认 `llm_provider` 为 `DeepSeekProvider`。认证、余额或限流
+错误会返回脱敏的 `502 external_llm_provider_error`，不会把 Key 或上游响应正文返回前端。
 
 启用 OpenAI：
 

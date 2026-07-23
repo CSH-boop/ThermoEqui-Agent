@@ -19,7 +19,7 @@ from pydantic import BaseModel
 
 from agent.executor import execute_task
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
-from agent.providers import DeepSeekProvider, LLMProvider, OpenAIProvider
+from agent.providers import DeepSeekProvider, LLMProvider, LLMProviderError, OpenAIProvider
 from agent.router import load_model_cards, recommend_models
 from database.session import Repository, initialize_database
 from schemas.domain import (
@@ -106,6 +106,19 @@ async def thermo_error(request: Request, exc: ThermoEquiError) -> JSONResponse:
         )
     )
     return JSONResponse(status_code=422, content=payload.model_dump(mode="json"))
+
+
+@app.exception_handler(LLMProviderError)
+async def llm_provider_error(request: Request, exc: LLMProviderError) -> JSONResponse:
+    payload = ErrorResponse(
+        error=ErrorBody(
+            code="external_llm_provider_error",
+            message=str(exc),
+            details={"provider": exc.provider, "upstream_status": exc.status_code},
+            request_id=request.state.request_id,
+        )
+    )
+    return JSONResponse(status_code=502, content=payload.model_dump(mode="json"))
 
 
 @app.exception_handler(ValueError)

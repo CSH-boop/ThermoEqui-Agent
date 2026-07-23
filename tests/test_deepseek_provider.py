@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import httpx
 import pytest
+import yaml
+from pydantic import ValidationError
 
-from agent.providers import DeepSeekProvider
+from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
+from agent.providers import DeepSeekProvider, LLMProviderError
 from apps.api.main import configured_provider
 from schemas.domain import Intent
 
@@ -47,6 +51,7 @@ async def test_deepseek_provider_classifies_intent_through_chat_completions() ->
         ],
         "stream": False,
         "thinking": {"type": "disabled"},
+        "max_tokens": 32,
     }
 
 
@@ -61,6 +66,15 @@ def test_api_configuration_selects_deepseek_provider(monkeypatch: pytest.MonkeyP
     assert isinstance(provider, DeepSeekProvider)
     assert provider.model == "deepseek-v4-pro"
     assert provider.base_url == "https://api.deepseek.com"
+
+
+def test_api_configuration_without_deepseek_key_falls_back_safely(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", "deepseek")
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
+    provider = configured_provider()
+
+    assert isinstance(provider, DeterministicProvider)
 
 
 @pytest.mark.asyncio
@@ -90,3 +104,117 @@ async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None
     assert task is not None
     assert task.calculation_type == "isobaric_vle"
     assert captured_payload["response_format"] == {"type": "json_object"}
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "choices": [
+                    {
+                        "message": {
+                            "content": "预测泡点为 351.23 K，来源：https://example.invalid/fabricated",
+                        }
+                    }
+                ]
+            },
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    statements = await provider.answer_with_evidence("解释苯和甲苯的汽液平衡")
+
+    assert statements[0].category == "Warning"
+    assert "351.23" not in statements[0].text
+    assert "example.invalid" not in statements[0].text
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_rejects_malformed_response_schema() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"unexpected": "shape"}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(ValidationError):
+        await provider.classify_intent("解释 NRTL")
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_sanitizes_remote_api_errors() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            401,
+            json={"error": {"message": "server-secret-detail"}},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderError) as captured:
+        await provider.classify_intent("解释 NRTL")
+
+    assert captured.value.provider == "DeepSeek"
+    assert captured.value.status_code == 401
+    assert "test-key" not in str(captured.value)
+    assert "server-secret-detail" not in str(captured.value)
+
+
+def test_compose_forwards_deepseek_configuration_to_api() -> None:
+    compose = yaml.safe_load(Path("docker-compose.yml").read_text(encoding="utf-8"))
+    environment = compose["services"]["api"]["environment"]
+
+    assert environment["DEEPSEEK_API_KEY"] == "${DEEPSEEK_API_KEY:-}"
+    assert environment["DEEPSEEK_MODEL"] == "${DEEPSEEK_MODEL:-deepseek-v4-flash}"
+    assert environment["DEEPSEEK_BASE_URL"] == "${DEEPSEEK_BASE_URL:-https://api.deepseek.com}"
+
+
+@pytest.mark.asyncio
+async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_result() -> None:
+    task_payload = {
+        "equilibrium_type": "VLE",
+        "calculation_type": "isobaric_vle",
+        "components": [
+            {"component_id": "benzene", "name": "Benzene", "cas_number": "71-43-2"},
+            {"component_id": "toluene", "name": "Toluene", "cas_number": "108-88-3"},
+        ],
+        "conditions": {"pressure_kPa": 101.325},
+        "model_name": "Ideal/Raoult",
+    }
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(task_payload),
+        "计算结果已通过确定性验证。",
+    ]
+    requests: list[dict[str, object]] = []
+
+    async def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": responses[len(requests) - 1]}}]},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    response = await ConversationOrchestrator(provider).chat("计算苯-甲苯在101.325 kPa下的T-x-y曲线")
+
+    assert response.calculation is not None
+    assert len(response.calculation.result.points) == 21
+    assert response.calculation.validation.overall_status in {"passed", "warning"}
+    interpretation_input = json.loads(requests[2]["messages"][1]["content"])  # type: ignore[index]
+    assert len(interpretation_input["result"]["points"]) == 21
+    assert interpretation_input["validation"]["overall_status"] in {"passed", "warning"}
