@@ -192,3 +192,23 @@ def test_unparseable_deepseek_task_is_reported_as_gateway_error(monkeypatch: pyt
     assert response.status_code == 502
     assert response.json()["error"]["code"] == "external_llm_output_error"
     assert "not-a-task-manifest" not in response.text
+
+
+def test_malformed_deepseek_envelope_is_reported_as_sanitized_gateway_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"unexpected": "upstream-private-content"})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post("/api/chat", json={"message": "解释 NRTL"})
+
+    assert response.status_code == 502
+    assert response.json()["error"]["code"] == "external_llm_output_error"
+    assert "upstream-private-content" not in response.text

@@ -8,10 +8,9 @@ from pathlib import Path
 import httpx
 import pytest
 import yaml
-from pydantic import ValidationError
 
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
-from agent.providers import DeepSeekProvider, LLMProviderError
+from agent.providers import DeepSeekProvider, LLMProviderError, LLMProviderOutputError
 from apps.api.main import configured_provider
 from schemas.domain import Intent
 
@@ -170,7 +169,24 @@ async def test_deepseek_provider_rejects_malformed_response_schema() -> None:
         transport=httpx.MockTransport(respond),
     )
 
-    with pytest.raises(ValidationError):
+    with pytest.raises(LLMProviderOutputError):
+        await provider.classify_intent("解释 NRTL")
+
+
+@pytest.mark.asyncio
+async def test_deepseek_provider_rejects_empty_assistant_content() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "   "}}]},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
         await provider.classify_intent("解释 NRTL")
 
 

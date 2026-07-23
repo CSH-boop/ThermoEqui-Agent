@@ -196,7 +196,10 @@ class OpenAIProvider(ConstrainedLLMProvider):
                 raise LLMProviderError("OpenAI", error.response.status_code) from None
             except httpx.RequestError:
                 raise LLMProviderError("OpenAI") from None
-            completion = _OpenAIResponse.model_validate(response.json())
+            try:
+                completion = _OpenAIResponse.model_validate(response.json())
+            except (json.JSONDecodeError, ValidationError):
+                raise LLMProviderOutputError("External provider returned an invalid response envelope.") from None
         texts = [
             part.text
             for output in completion.output
@@ -205,7 +208,7 @@ class OpenAIProvider(ConstrainedLLMProvider):
         ]
         content = "".join(texts)
         if not content.strip():
-            raise ValueError("OpenAI response contained empty assistant content")
+            raise LLMProviderOutputError("External provider returned empty assistant content.")
         return content
 
 
@@ -257,8 +260,11 @@ class DeepSeekProvider(ConstrainedLLMProvider):
                 raise LLMProviderError("DeepSeek", error.response.status_code) from None
             except httpx.RequestError:
                 raise LLMProviderError("DeepSeek") from None
-            completion = _DeepSeekChatCompletion.model_validate(response.json())
+            try:
+                completion = _DeepSeekChatCompletion.model_validate(response.json())
+            except (json.JSONDecodeError, ValidationError):
+                raise LLMProviderOutputError("External provider returned an invalid response envelope.") from None
         content = completion.choices[0].message.content
         if not content.strip():
-            raise ValueError("DeepSeek response contained empty assistant content")
+            raise LLMProviderOutputError("External provider returned empty assistant content.")
         return content
