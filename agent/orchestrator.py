@@ -18,7 +18,7 @@ from schemas.domain import (
     ThermodynamicConditions,
 )
 from thermo_engine.errors import ThermoEquiError
-from thermo_engine.identity import resolve_external_component
+from thermo_engine.identity import resolve_literal_components
 from thermo_engine.units import pressure_to_kpa, temperature_to_kelvin
 
 COMPONENT_PATTERNS = (
@@ -42,6 +42,7 @@ def _mentioned_components(message: str) -> list[ComponentIdentity]:
             component_id=component_id,
             name=name,
             cas_number=cas_number,
+            aliases=list(aliases),
         )
         for alias in aliases:
             escaped = re.escape(alias)
@@ -79,6 +80,55 @@ def _token_position(message: str, token: str) -> int | None:
     pattern = rf"(?<![a-z0-9]){escaped}(?![a-z0-9])" if normalized.isascii() else escaped
     match = re.search(pattern, message.casefold())
     return match.start() if match is not None else None
+
+
+def _component_role_is_ambiguous(message: str, position: int) -> bool:
+    lower = message.casefold()
+    if any(
+        marker in lower
+        for marker in (
+            " compare ",
+            " compared ",
+            " versus ",
+            " vs ",
+            "difference between",
+            "比较",
+            "对比",
+            "区别",
+        )
+    ):
+        return True
+    prefix = lower[max(0, position - 32) : position]
+    return bool(
+        re.search(
+            r"(?:without|excluding|exclude|except|not|such as|example of|e\.g\.|"
+            r"不含|排除|不要|不包括|例如|比如)\s*$",
+            prefix,
+        )
+    )
+
+
+def _requested_components(message: str) -> list[ComponentIdentity]:
+    by_cas: dict[str, tuple[int, ComponentIdentity]] = {}
+    for component in _mentioned_components(message):
+        if component.cas_number is None:
+            continue
+        positions = [
+            position
+            for token in (component.name, *component.aliases, component.cas_number)
+            if (position := _token_position(message, token)) is not None
+        ]
+        if positions:
+            position = min(positions)
+            if _component_role_is_ambiguous(message, position):
+                raise LLMProviderOutputError("The component role is ambiguous and requires clarification.")
+            by_cas[component.cas_number] = (position, component)
+    for position, component in resolve_literal_components(message):
+        if _component_role_is_ambiguous(message, position):
+            raise LLMProviderOutputError("The component role is ambiguous and requires clarification.")
+        if component.cas_number is not None:
+            by_cas.setdefault(component.cas_number, (position, component))
+    return [component for _, component in sorted(by_cas.values(), key=lambda item: item[0])]
 
 
 @dataclass
@@ -419,7 +469,7 @@ class ConversationOrchestrator:
         *,
         previous_task: TaskManifest | None,
     ) -> TaskManifest:
-        mentioned = _mentioned_components(message)
+        mentioned = _requested_components(message)
         if previous_task is not None:
             previous_components = previous_task.components
             if mentioned:
@@ -440,34 +490,7 @@ class ConversationOrchestrator:
         elif mentioned:
             expected_components = mentioned
         else:
-            positioned_components: list[tuple[int, ComponentIdentity]] = []
-            for provider_component in task.components:
-                tokens = [
-                    provider_component.name,
-                    *([provider_component.cas_number] if provider_component.cas_number else []),
-                ]
-                grounded_candidates: list[tuple[int, ComponentIdentity]] = []
-                for token in tokens:
-                    position = _token_position(message, token)
-                    if position is None:
-                        continue
-                    resolved = resolve_external_component(token)
-                    if resolved is None:
-                        continue
-                    if (
-                        provider_component.cas_number is not None
-                        and resolved.cas_number != provider_component.cas_number
-                    ):
-                        raise LLMProviderOutputError("External provider returned a component name/CAS mismatch.")
-                    grounded_candidates.append((position, resolved))
-                if not grounded_candidates:
-                    raise LLMProviderOutputError(
-                        "External provider returned a component without deterministic identity evidence."
-                    )
-                positioned_components.append(min(grounded_candidates, key=lambda item: item[0]))
-            expected_components = [
-                component for _, component in sorted(positioned_components, key=lambda item: item[0])
-            ]
+            raise LLMProviderOutputError("No component identity could be resolved independently from the user message.")
         grounded = cls._align_task_components(task, expected_components)
         return grounded.model_copy(update={"original_question": message})
 
@@ -498,6 +521,8 @@ class ConversationOrchestrator:
                 raise LLMProviderOutputError(
                     "External provider returned components inconsistent with the user message."
                 )
+            if provider_component.cas_number is not None and provider_component.cas_number != matches[0]:
+                raise LLMProviderOutputError("External provider returned a component name/CAS mismatch.")
             provider_order.append(matches[0])
         expected_order = [component.cas_number for component in expected_components if component.cas_number is not None]
         if (

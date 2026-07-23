@@ -365,6 +365,80 @@ async def test_deepseek_component_name_cannot_carry_another_compounds_cas() -> N
 
 
 @pytest.mark.asyncio
+async def test_deepseek_cannot_omit_external_component_from_mixed_system() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "VLE",
+                "calculation_type": "BUBBLE_POINT",
+                "components": [{"component_id": "benzene", "name": "Benzene", "cas_number": "71-43-2"}],
+                "conditions": {
+                    "pressure_kPa": 101.325,
+                    "liquid_composition": [1.0],
+                },
+                "model_name": "Ideal/Raoult",
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).chat("Calculate the acetone and benzene bubble point at 101.325 kPa.")
+
+
+@pytest.mark.asyncio
+async def test_deepseek_requires_clarification_for_negated_component_role() -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [
+                    {"component_id": "acetone", "name": "Acetone", "cas_number": "67-64-1"},
+                    {"component_id": "ethanol", "name": "Ethanol", "cas_number": "64-17-5"},
+                ],
+                "conditions": {
+                    "temperature_K": 300.0,
+                    "pressure_kPa": 100.0,
+                    "feed_composition": [0.5, 0.5],
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await ConversationOrchestrator(provider).chat(
+            "Calculate acetone TP Flash at 300 K and 100 kPa without ethanol."
+        )
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
