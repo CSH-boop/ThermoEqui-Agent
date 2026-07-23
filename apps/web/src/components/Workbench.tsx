@@ -152,7 +152,7 @@ export function Workbench() {
             ))}
           </section>
         )}
-        <label className="field">模型<select aria-label="热力学模型" value={task?.model_name ?? "Ideal/Raoult"} onChange={(event) => updateModel(event.target.value)}><option>Ideal/Raoult</option><option>Wilson</option><option>NRTL</option><option>UNIQUAC</option><option>Peng-Robinson</option></select></label>
+        <label className="field">模型<select aria-label="热力学模型" value={task?.model_name ?? "Ideal/Raoult"} onChange={(event) => updateModel(event.target.value)}><option>Ideal/Raoult</option><option>Wilson</option><option>NRTL</option><option>UNIQUAC</option><option>Peng-Robinson</option><option>Phasepy/Peng-Robinson</option><option>Clapeyron/Peng-Robinson</option></select></label>
         <label className="field">压力 / kPa<input aria-label="压力 kPa" type="number" step="0.001" min="0.001" value={task?.conditions.pressure_kPa ?? ""} onChange={(event) => updatePressure(event.target.value)} /></label>
         <label className="field">温度 / K<input aria-label="温度 K" type="number" step="0.01" min="0.01" value={task?.conditions.temperature_K ?? ""} onChange={(event) => updateTemperature(event.target.value)} /></label>
         <label className="field">组成（逗号分隔）<input aria-label="摩尔组成" value={(task?.conditions.feed_composition ?? task?.conditions.vapor_composition ?? task?.conditions.liquid_composition ?? []).join(", ")} onChange={(event) => updateComposition(event.target.value)} placeholder="0.5, 0.5" /></label>

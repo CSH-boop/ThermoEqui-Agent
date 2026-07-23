@@ -167,15 +167,23 @@ def has_chemical_role_evidence(message: str, start: int, end: int) -> bool:
 
 def is_electrolyte_identity(component: ComponentIdentity) -> bool:
     """Return whether a resolved component is a supported-scope electrolyte salt."""
-    if component.cas_number is None:
-        return False
+    cas_number = component.cas_number
+    resolved_name = component.name
+    if cas_number is None:
+        resolved = resolve_external_component(component.name)
+        if resolved is None or resolved.cas_number is None:
+            return _ELECTROLYTE_NAME_PATTERN.search(component.name.strip()) is not None
+        cas_number = resolved.cas_number
+        resolved_name = resolved.name
     try:
-        metadata = search_chemical(component.cas_number)
+        metadata = search_chemical(cas_number)
     except (ValueError, LookupError, TypeError):
         return False
-    is_registered = component.cas_number in _CURATED_ELECTROLYTE_CAS
+    is_registered = cas_number in _CURATED_ELECTROLYTE_CAS
     is_charged = bool(metadata.charge)
-    is_curated_electrolyte = _ELECTROLYTE_NAME_PATTERN.search(component.name.strip()) is not None
+    is_curated_electrolyte = any(
+        _ELECTROLYTE_NAME_PATTERN.search(name.strip()) is not None for name in (component.name, resolved_name)
+    )
     return is_registered or is_charged or is_curated_electrolyte
 
 

@@ -83,6 +83,11 @@ class ThermoPengRobinsonBackend:
         return inapplicable
 
     @classmethod
+    def inapplicable_components(cls, constants: Any) -> list[str]:
+        """Return components outside the reviewed PR adapter applicability domain."""
+        return cls._inapplicable_components(constants)
+
+    @classmethod
     def supports_system(cls, request: TaskManifest) -> bool:
         identifiers = [component.cas_number or component.component_id for component in request.components]
         try:

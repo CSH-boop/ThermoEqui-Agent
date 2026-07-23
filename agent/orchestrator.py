@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from agent.graph_workflow import BoundedAgentGraph
 from agent.providers import LLMProvider, LLMProviderOutputError
 from agent.tools import DEFAULT_TOOL_REGISTRY, EngineeringToolRegistry
 from schemas.domain import (
@@ -353,6 +354,7 @@ class ConversationOrchestrator:
     ) -> None:
         self.provider = provider or DeterministicProvider()
         self.tools = tools or DEFAULT_TOOL_REGISTRY
+        self.graph = BoundedAgentGraph(self.provider, self.tools)
         self.states: dict[str, ConversationState] = {}
 
     async def parse(self, message: str, conversation_id: str | None = None) -> tuple[Intent, TaskManifest | None]:
@@ -427,47 +429,15 @@ class ConversationOrchestrator:
                 task=task,
             )
         try:
-            plan_step = AgentStep(
-                phase="plan",
-                status="completed",
-                summary="A structured task manifest was created and an allowlisted tool was selected.",
-            )
-            tool_name = await self.provider.select_tool(message, task, self.tools.catalog())
-            envelope = self.tools.execute(tool_name, task)
-            result = envelope.result
+            envelope, statements, execution_steps = await self.graph.run(message, task)
             validation = envelope.validation
             state.run_ids.append(envelope.result.run_id)
-            statements = await self.provider.interpret_result(
-                {
-                    "result": result.model_dump(mode="json"),
-                    "validation": validation.model_dump(mode="json"),
-                }
-            )
             return ChatResponse(
                 conversation_id=conversation_id,
                 intent=intent,
                 answer="计算完成。" if validation.overall_status != "failed" else "计算未通过物理验证。",
                 statements=statements,
-                execution_steps=[
-                    plan_step,
-                    AgentStep(
-                        phase="execute",
-                        status="completed",
-                        summary="The registered deterministic phase-equilibrium tool completed.",
-                        tool_name=tool_name,
-                    ),
-                    AgentStep(
-                        phase="validate",
-                        status="completed" if validation.overall_status != "failed" else "failed",
-                        summary=f"Independent physical validation status: {validation.overall_status}.",
-                        tool_name=tool_name,
-                    ),
-                    AgentStep(
-                        phase="respond",
-                        status="completed",
-                        summary="The provider interpreted only the grounded calculation and validation payload.",
-                    ),
-                ],
+                execution_steps=execution_steps,
                 task=task,
                 calculation=envelope,
             )

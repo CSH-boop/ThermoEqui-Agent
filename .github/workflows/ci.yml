@@ -32,3 +32,19 @@ jobs:
       - run: pnpm --dir apps/web test
       - run: pnpm --dir apps/web lint
       - run: pnpm --dir apps/web build
+  external-engines:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.11"
+      - uses: julia-actions/cache@v2
+      - run: pip install -e ".[dev,phase-engines]"
+      - run: pytest tests/test_external_backends.py
+        env:
+          RUN_CLAPEYRON_INTEGRATION: "1"

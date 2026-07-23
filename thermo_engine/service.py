@@ -5,6 +5,7 @@ from __future__ import annotations
 from schemas.domain import CalculationResult, FailureType, TaskManifest, ValidationReport
 from thermo_engine.backend import ThermodynamicBackend
 from thermo_engine.errors import ThermoEquiError
+from thermo_engine.identity import is_electrolyte_identity, resolve_external_component
 from thermo_engine.registry import DEFAULT_BACKEND_REGISTRY
 from thermo_engine.validation import validate_result
 
@@ -55,15 +56,43 @@ def _reject_unsupported_scope(task_manifest: TaskManifest) -> None:
         )
 
 
+def _verify_component_identities(task_manifest: TaskManifest) -> None:
+    electrolytes = [component.name for component in task_manifest.components if is_electrolyte_identity(component)]
+    if electrolytes:
+        raise ThermoEquiError(
+            FailureType.UNSUPPORTED_MODEL,
+            "Electrolyte components are outside the non-electrolyte molecular scope of version 0.1.",
+            "Use a validated electrolyte thermodynamics backend.",
+            {"electrolyte_components": electrolytes},
+        )
+    for component in task_manifest.components:
+        if component.cas_number is None:
+            continue
+        resolved_name = resolve_external_component(component.name)
+        if resolved_name is None or resolved_name.cas_number == component.cas_number:
+            continue
+        raise ThermoEquiError(
+            FailureType.SEMANTIC_FAILURE,
+            f"Component name {component.name!r} does not match declared CAS {component.cas_number}.",
+            "Correct the component identity before calculation.",
+            {
+                "component_name": component.name,
+                "declared_cas": component.cas_number,
+                "resolved_cas": resolved_name.cas_number,
+            },
+        )
+
+
 def calculate_equilibrium(
     task_manifest: TaskManifest, backend: ThermodynamicBackend | None = None
 ) -> CalculationResult:
     """Execute one manifest without any LLM or frontend dependency."""
     if task_manifest.original_question is None:
         task_manifest = task_manifest.model_copy(update={"original_question": "Structured Python/CLI submission"})
+    _verify_component_identities(task_manifest)
+    _reject_unsupported_scope(task_manifest)
     if task_manifest.model_name is None:
         task_manifest = DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
-    _reject_unsupported_scope(task_manifest)
     selected = backend or DEFAULT_BACKEND_REGISTRY.resolve(task_manifest)
     requested_model = (task_manifest.model_name or "Ideal/Raoult").casefold()
     if task_manifest.composition_basis == "mass_fraction":
@@ -101,11 +130,15 @@ def calculate_equilibrium(
 
 def resolve_backend(task_manifest: TaskManifest) -> ThermodynamicBackend:
     """Resolve the deterministic backend without executing an operation."""
+    _verify_component_identities(task_manifest)
+    _reject_unsupported_scope(task_manifest)
     return DEFAULT_BACKEND_REGISTRY.resolve(task_manifest)
 
 
 def route_task_model(task_manifest: TaskManifest) -> TaskManifest:
     """Return a manifest with a conservative deterministic model selection."""
+    _verify_component_identities(task_manifest)
+    _reject_unsupported_scope(task_manifest)
     return DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
 
 

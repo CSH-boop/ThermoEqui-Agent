@@ -7,8 +7,10 @@ from dataclasses import dataclass
 
 from schemas.domain import FailureType, TaskManifest
 from thermo_engine.backend import ThermodynamicBackend
+from thermo_engine.clapeyron_backend import ClapeyronPengRobinsonBackend
 from thermo_engine.errors import ThermoEquiError
 from thermo_engine.ideal import IdealRaoultBackend
+from thermo_engine.phasepy_backend import PhasepyPengRobinsonBackend
 from thermo_engine.properties import resolve_component
 from thermo_engine.thermo_backend import ThermoPengRobinsonBackend
 
@@ -136,6 +138,50 @@ DEFAULT_BACKEND_REGISTRY = ThermodynamicBackendRegistry(
                 }
             ),
             factory=ThermoPengRobinsonBackend,
+        ),
+        BackendRegistration(
+            canonical_name="Phasepy/Peng-Robinson",
+            aliases=frozenset(
+                {
+                    "phasepy",
+                    "phasepy/pr",
+                    "phasepy/peng-robinson",
+                    "phasepy/peng robinson",
+                }
+            ),
+            supported_calculations=frozenset(
+                {
+                    "bubble_point",
+                    "dew_point",
+                    "isobaric_vle",
+                    "isothermal_vle",
+                    "tp_flash",
+                    "azeotrope",
+                }
+            ),
+            factory=PhasepyPengRobinsonBackend,
+        ),
+        BackendRegistration(
+            canonical_name="Clapeyron/Peng-Robinson",
+            aliases=frozenset(
+                {
+                    "clapeyron",
+                    "clapeyron/pr",
+                    "clapeyron/peng-robinson",
+                    "clapeyron/peng robinson",
+                }
+            ),
+            supported_calculations=frozenset(
+                {
+                    "bubble_point",
+                    "dew_point",
+                    "isobaric_vle",
+                    "isothermal_vle",
+                    "tp_flash",
+                    "azeotrope",
+                }
+            ),
+            factory=ClapeyronPengRobinsonBackend,
         ),
     )
 )

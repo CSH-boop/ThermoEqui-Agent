@@ -5,11 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from agent.executor import execute_task
-from schemas.domain import CalculationEnvelope, FailureType, TaskManifest
+from agent.executor import TaskExecution, calculate_task
+from schemas.domain import FailureType, TaskManifest
 from thermo_engine.errors import ThermoEquiError
 
-ToolHandler = Callable[[TaskManifest], CalculationEnvelope]
+ToolHandler = Callable[[TaskManifest], TaskExecution]
 
 
 @dataclass(frozen=True)
@@ -28,7 +28,7 @@ class EngineeringToolRegistry:
     def catalog(self) -> list[dict[str, str]]:
         return [{"name": tool.name, "description": tool.description} for tool in self._tools.values()]
 
-    def execute(self, name: str, task: TaskManifest) -> CalculationEnvelope:
+    def execute(self, name: str, task: TaskManifest) -> TaskExecution:
         tool = self._tools.get(name)
         if tool is None:
             raise ThermoEquiError(
@@ -47,7 +47,7 @@ DEFAULT_TOOL_REGISTRY = EngineeringToolRegistry(
                 "Execute a structured non-electrolyte phase-equilibrium task through a deterministic "
                 "backend and independent validation gate."
             ),
-            handler=execute_task,
+            handler=calculate_task,
         ),
     )
 )

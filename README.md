@@ -28,7 +28,7 @@ VLLE 和完整精馏塔设计会被明确拒绝。NRTL/UNIQUAC 二元 LLE 当前
 ```mermaid
 flowchart LR
   UI[Next.js workbench] --> API[FastAPI]
-  API --> Agent[Conversation orchestrator]
+  API --> Agent[Bounded LangGraph orchestrator]
   Agent --> Provider[DeepSeek / deterministic provider]
   Agent --> Tools[Constrained engineering tools]
   Tools --> Router[Applicability router]
