@@ -32,9 +32,26 @@ class LLMProviderError(RuntimeError):
         super().__init__(f"{provider} API request failed{detail}.")
 
 
-_NUMERIC_TOKEN = re.compile(r"(?<![\w.])[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?(?![\w.])")
-_EXTERNAL_REFERENCE = re.compile(r"https?://|doi\s*:|10\.\d{4,9}/", re.IGNORECASE)
+_NUMERIC_TOKEN = re.compile(r"(?<![\w.])[-+]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][-+]?\d+)?(?![\w.])")
+_EXTERNAL_REFERENCE = re.compile(
+    r"https?://|doi\s*:|10\.\d{4,9}/|NIST|Chemistry WebBook|according to|"
+    r"\bsource\b|\bcitation\b|\breference\b|\bbibliography\b|\bet al\.?|文献|来源|参考|研究表明|数据库",
+    re.IGNORECASE,
+)
 _WITHHELD_TEXT = "外部模型输出因包含未经确定性工具证实的数值或引用而被扣留。"
+
+
+class _OpenAIContentPart(BaseModel):
+    type: str
+    text: str | None = None
+
+
+class _OpenAIOutput(BaseModel):
+    content: list[_OpenAIContentPart] = Field(default_factory=list)
+
+
+class _OpenAIResponse(BaseModel):
+    output: list[_OpenAIOutput] = Field(default_factory=list)
 
 
 class _DeepSeekMessage(BaseModel):
@@ -49,11 +66,10 @@ class _DeepSeekChatCompletion(BaseModel):
     choices: list[_DeepSeekChoice] = Field(min_length=1)
 
 
-def _contains_ungrounded_claim(text: str, grounded_source: str | None = None) -> bool:
+def _contains_ungrounded_claim(text: str) -> bool:
     if _EXTERNAL_REFERENCE.search(text):
         return True
-    allowed_numbers = set(_NUMERIC_TOKEN.findall(grounded_source or ""))
-    return any(token not in allowed_numbers for token in _NUMERIC_TOKEN.findall(text))
+    return bool(_NUMERIC_TOKEN.search(text))
 
 
 class ConstrainedLLMProvider:
@@ -104,7 +120,7 @@ class ConstrainedLLMProvider:
             "Interpret only the supplied tool JSON. Preserve failures and warnings; do not add numbers or citations.",
             grounded_source,
         )
-        if _contains_ungrounded_claim(value, grounded_source):
+        if _contains_ungrounded_claim(value):
             return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
         return [EvidenceStatement(category="Inference", text=value)]
 
@@ -142,14 +158,17 @@ class OpenAIProvider(ConstrainedLLMProvider):
                 raise LLMProviderError("OpenAI", error.response.status_code) from None
             except httpx.RequestError:
                 raise LLMProviderError("OpenAI") from None
-            body = response.json()
+            completion = _OpenAIResponse.model_validate(response.json())
         texts = [
-            part.get("text", "")
-            for output in body.get("output", [])
-            for part in output.get("content", [])
-            if part.get("type") == "output_text"
+            part.text
+            for output in completion.output
+            for part in output.content
+            if part.type == "output_text" and part.text is not None
         ]
-        return "".join(texts)
+        content = "".join(texts)
+        if not content.strip():
+            raise ValueError("OpenAI response contained empty assistant content")
+        return content
 
 
 class DeepSeekProvider(ConstrainedLLMProvider):

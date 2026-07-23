@@ -115,7 +115,7 @@ async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() ->
                 "choices": [
                     {
                         "message": {
-                            "content": "预测泡点为 351.23 K，来源：https://example.invalid/fabricated",
+                            "content": "预测汽化率为 .5，根据 NIST Chemistry WebBook。",
                         }
                     }
                 ]
@@ -130,8 +130,8 @@ async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() ->
     statements = await provider.answer_with_evidence("解释苯和甲苯的汽液平衡")
 
     assert statements[0].category == "Warning"
-    assert "351.23" not in statements[0].text
-    assert "example.invalid" not in statements[0].text
+    assert ".5" not in statements[0].text
+    assert "NIST" not in statements[0].text
 
 
 @pytest.mark.asyncio
