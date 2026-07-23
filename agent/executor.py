@@ -2,17 +2,25 @@
 
 from agent.router import recommend_models
 from schemas.domain import CalculationEnvelope, TaskManifest
-from thermo_engine.properties import component_sources, resolve_component
-from thermo_engine.service import calculate_equilibrium, validate_equilibrium_result
+from thermo_engine.service import (
+    calculate_equilibrium,
+    resolve_backend,
+    route_task_model,
+    validate_equilibrium_result,
+)
 
 
 def execute_task(task: TaskManifest) -> CalculationEnvelope:
-    result = calculate_equilibrium(task)
+    task = route_task_model(task)
+    backend = resolve_backend(task)
+    result = calculate_equilibrium(task, backend=backend)
     validation = validate_equilibrium_result(result)
-    components = [resolve_component(component) for component in task.components]
     return CalculationEnvelope(
         result=result,
         validation=validation,
-        parameter_sources=component_sources(components),
-        model_recommendations=recommend_models(task),
+        parameter_sources=backend.parameter_sources(task),
+        model_recommendations=recommend_models(
+            task,
+            available_parameter_models={task.model_name} if task.model_name is not None else set(),
+        ),
     )

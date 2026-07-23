@@ -6,9 +6,10 @@ import re
 from dataclasses import dataclass, field
 from uuid import uuid4
 
-from agent.executor import execute_task
 from agent.providers import LLMProvider, LLMProviderOutputError
+from agent.tools import DEFAULT_TOOL_REGISTRY, EngineeringToolRegistry
 from schemas.domain import (
+    AgentStep,
     ChatResponse,
     ComponentIdentity,
     EvidenceStatement,
@@ -187,8 +188,13 @@ class DeterministicProvider:
 
 
 class ConversationOrchestrator:
-    def __init__(self, provider: LLMProvider | None = None) -> None:
+    def __init__(
+        self,
+        provider: LLMProvider | None = None,
+        tools: EngineeringToolRegistry | None = None,
+    ) -> None:
         self.provider = provider or DeterministicProvider()
+        self.tools = tools or DEFAULT_TOOL_REGISTRY
         self.states: dict[str, ConversationState] = {}
 
     async def parse(self, message: str, conversation_id: str | None = None) -> tuple[Intent, TaskManifest | None]:
@@ -252,7 +258,12 @@ class ConversationOrchestrator:
                 task=task,
             )
         try:
-            envelope = execute_task(task)
+            plan_step = AgentStep(
+                phase="plan",
+                status="completed",
+                summary="A structured task manifest was created with explicit components, conditions, and model.",
+            )
+            envelope = self.tools.execute("phase_equilibrium", task)
             result = envelope.result
             validation = envelope.validation
             state.run_ids.append(envelope.result.run_id)
@@ -267,6 +278,26 @@ class ConversationOrchestrator:
                 intent=intent,
                 answer="计算完成。" if validation.overall_status != "failed" else "计算未通过物理验证。",
                 statements=statements,
+                execution_steps=[
+                    plan_step,
+                    AgentStep(
+                        phase="execute",
+                        status="completed",
+                        summary="The registered deterministic phase-equilibrium tool completed.",
+                        tool_name="phase_equilibrium",
+                    ),
+                    AgentStep(
+                        phase="validate",
+                        status="completed" if validation.overall_status != "failed" else "failed",
+                        summary=f"Independent physical validation status: {validation.overall_status}.",
+                        tool_name="phase_equilibrium",
+                    ),
+                    AgentStep(
+                        phase="respond",
+                        status="completed",
+                        summary="The provider interpreted only the grounded calculation and validation payload.",
+                    ),
+                ],
                 task=task,
                 calculation=envelope,
             )
@@ -276,6 +307,19 @@ class ConversationOrchestrator:
                 intent=intent,
                 answer=error.detail.message,
                 statements=[EvidenceStatement(category="Warning", text=error.detail.recovery_action)],
+                execution_steps=[
+                    AgentStep(
+                        phase="plan",
+                        status="completed",
+                        summary="A structured task manifest was created.",
+                    ),
+                    AgentStep(
+                        phase="execute",
+                        status="failed",
+                        summary=error.detail.message,
+                        tool_name="phase_equilibrium",
+                    ),
+                ],
                 task=task,
             )
 

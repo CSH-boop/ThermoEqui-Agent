@@ -152,14 +152,104 @@ def test_ideal_model_is_blocked_outside_configured_pressure_regime() -> None:
     assert captured.value.detail.failure_type == "parameter_out_of_domain"
 
 
-def test_unimplemented_eos_is_not_misreported_as_missing_parameters() -> None:
+def test_peng_robinson_tp_flash_matches_upstream_reference_case() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="methane", name="Methane", cas_number="74-82-8"),
+            ComponentIdentity(component_id="ethane", name="Ethane", cas_number="74-84-0"),
+            ComponentIdentity(component_id="nitrogen", name="Nitrogen", cas_number="7727-37-9"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=110.0,
+            pressure_kPa=100.0,
+            feed_composition=[0.965, 0.018, 0.017],
+        ),
+        model_name="Peng-Robinson",
+    )
+
+    result = calculate_equilibrium(task)
+    report = validate_equilibrium_result(result)
+
+    assert result.model_name == "Peng-Robinson"
+    assert result.backend_version.startswith("thermo/")
+    assert result.vapor_fraction == pytest.approx(0.0890325, abs=2e-4)
+    assert result.phases[0].composition == pytest.approx([0.974400, 0.019757, 0.005843], abs=2e-4)
+    assert result.phases[1].composition == pytest.approx([0.868821, 0.000025766, 0.131154], abs=2e-4)
+    assert report.material_balance.passed
+    assert report.equilibrium_residual.passed
+
+
+def test_peng_robinson_requires_reviewed_binary_parameters() -> None:
     task = manifest(
         "tp_flash",
-        ThermodynamicConditions(temperature_K=365.0, pressure_kPa=101.325, feed_composition=[0.5, 0.5]),
+        ThermodynamicConditions(
+            temperature_K=365.0,
+            pressure_kPa=101.325,
+            feed_composition=[0.5, 0.5],
+        ),
     ).model_copy(update={"model_name": "Peng-Robinson"})
+
     with pytest.raises(ThermoEquiError) as captured:
         calculate_equilibrium(task)
-    assert captured.value.detail.failure_type == "unsupported_model"
+
+    assert captured.value.detail.failure_type == "missing_parameters"
+    assert captured.value.detail.details["parameter_table"] == "ChemSep PR"
+    assert captured.value.detail.details["missing_pairs"] == [["71-43-2", "108-88-3"]]
+
+
+def test_unset_model_routes_high_pressure_flash_to_peng_robinson() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="methane", name="Methane", cas_number="74-82-8"),
+            ComponentIdentity(component_id="ethane", name="Ethane", cas_number="74-84-0"),
+            ComponentIdentity(component_id="nitrogen", name="Nitrogen", cas_number="7727-37-9"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=150.0,
+            pressure_kPa=1000.0,
+            feed_composition=[0.965, 0.018, 0.017],
+        ),
+        model_name=None,
+    )
+
+    result = calculate_equilibrium(task)
+    report = validate_equilibrium_result(result)
+
+    assert result.model_name == "Peng-Robinson"
+    assert result.input_snapshot["model_name"] == "Peng-Robinson"
+    assert report.overall_status in {"passed", "warning"}
+
+
+def test_single_phase_peng_robinson_flash_passes_material_balance() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="methane", name="Methane", cas_number="74-82-8"),
+            ComponentIdentity(component_id="ethane", name="Ethane", cas_number="74-84-0"),
+            ComponentIdentity(component_id="nitrogen", name="Nitrogen", cas_number="7727-37-9"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=110.0,
+            pressure_kPa=1000.0,
+            feed_composition=[0.965, 0.018, 0.017],
+        ),
+        model_name="Peng-Robinson",
+    )
+
+    result = calculate_equilibrium(task)
+    report = validate_equilibrium_result(result)
+
+    assert len(result.phases) == 1
+    assert result.phases[0].fraction == pytest.approx(1.0)
+    assert result.phases[0].composition == pytest.approx([0.965, 0.018, 0.017])
+    assert report.composition_balance.passed
+    assert report.material_balance.passed
+    assert report.convergence.passed
 
 
 def test_structured_polymer_task_is_rejected_by_shared_service_guard() -> None:

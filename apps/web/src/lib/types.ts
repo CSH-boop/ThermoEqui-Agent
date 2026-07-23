@@ -128,11 +128,19 @@ export interface EvidenceStatement {
   text: string;
 }
 
+export interface AgentStep {
+  phase: "plan" | "execute" | "validate" | "respond";
+  status: "completed" | "failed" | "blocked";
+  summary: string;
+  tool_name?: string | null;
+}
+
 export interface ChatResponse {
   conversation_id: string;
   intent: Intent;
   answer: string;
   statements: EvidenceStatement[];
+  execution_steps: AgentStep[];
   task?: TaskManifest | null;
   calculation?: CalculationEnvelope | null;
   request_id?: string | null;

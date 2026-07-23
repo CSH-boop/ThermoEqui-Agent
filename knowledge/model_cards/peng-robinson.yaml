@@ -2,7 +2,7 @@ model_name: Peng-Robinson
 family: cubic_eos
 supported_tasks: [VLE, FLASH]
 excluded_systems: [electrolyte, strongly_associating_without_extension]
-requires_binary_parameters: false
+requires_binary_parameters: true
 pressure_regime: [moderate, high]
 validation_requirements: [composition_balance, fugacity_equality, phase_stability]
-implementation_status: contract_only
+implementation_status: available

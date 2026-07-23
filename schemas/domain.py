@@ -233,11 +233,19 @@ class EvidenceStatement(BaseModel):
     text: str
 
 
+class AgentStep(BaseModel):
+    phase: Literal["plan", "execute", "validate", "respond"]
+    status: Literal["completed", "failed", "blocked"]
+    summary: str
+    tool_name: str | None = None
+
+
 class ChatResponse(BaseModel):
     conversation_id: str
     intent: Intent
     answer: str
     statements: list[EvidenceStatement]
+    execution_steps: list[AgentStep] = Field(default_factory=list)
     task: TaskManifest | None = None
     calculation: CalculationEnvelope | None = None
     request_id: str | None = None

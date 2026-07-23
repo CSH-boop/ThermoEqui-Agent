@@ -128,9 +128,17 @@ class ConstrainedLLMProvider:
 
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         context = previous.model_dump_json() if previous else "null"
+        schema = json.dumps(
+            TaskManifest.model_json_schema(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
         value = await self._request(
-            "Return only a TaskManifest JSON object or null. Never invent components or parameters. "
-            f"Previous manifest: {context}",
+            "Return only a TaskManifest JSON object or null. Follow the supplied JSON Schema exactly. "
+            "model_name may be null so the deterministic router can select an applicable model. "
+            "Never invent components, conditions, parameters, data, or citations. "
+            "Never calculate equilibrium numbers; deterministic tools do that after validation. "
+            f"TaskManifest JSON Schema: {schema}. Previous manifest: {context}",
             message,
             json_mode=True,
             max_tokens=2048,

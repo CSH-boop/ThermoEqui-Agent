@@ -62,6 +62,13 @@ def test_chat_persists_real_run_and_exports_json_and_csv() -> None:
         assert response.status_code == 200
         payload = response.json()
         assert payload["calculation"]["validation"]["overall_status"] in {"passed", "warning"}
+        assert [step["phase"] for step in payload["execution_steps"]] == [
+            "plan",
+            "execute",
+            "validate",
+            "respond",
+        ]
+        assert payload["execution_steps"][1]["tool_name"] == "phase_equilibrium"
         run_id = payload["calculation"]["result"]["run_id"]
         run = test_client.get(f"/api/runs/{run_id}")
         assert run.status_code == 200
@@ -99,6 +106,36 @@ def test_openapi_contains_all_required_routes() -> None:
         "/health",
     }
     assert expected <= set(api_module.app.openapi()["paths"])
+
+
+def test_peng_robinson_api_returns_thermo_and_chemsep_provenance() -> None:
+    task = {
+        "equilibrium_type": "FLASH",
+        "calculation_type": "tp_flash",
+        "components": [
+            {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+            {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+            {"component_id": "nitrogen", "name": "Nitrogen", "cas_number": "7727-37-9"},
+        ],
+        "conditions": {
+            "temperature_K": 110.0,
+            "pressure_kPa": 100.0,
+            "feed_composition": [0.965, 0.018, 0.017],
+        },
+        "model_name": "Peng-Robinson",
+    }
+
+    with client() as test_client:
+        response = test_client.post("/api/calculations/tp-flash", json=task)
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["result"]["backend_version"].startswith("thermo/")
+    assert payload["validation"]["material_balance"]["passed"]
+    assert any(source["source_title"] == "ChemSep PR" for source in payload["parameter_sources"])
+    assert any(source["source_title"] == "CalebBell/thermo" for source in payload["parameter_sources"])
+    recommendation = next(item for item in payload["model_recommendations"] if item["model_name"] == "Peng-Robinson")
+    assert recommendation["executable"]
 
 
 def test_request_validation_and_not_found_use_unified_error_shape() -> None:

@@ -129,6 +129,13 @@ async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None
     assert task is not None
     assert task.calculation_type == "isobaric_vle"
     assert captured_payload["response_format"] == {"type": "json_object"}
+    messages = captured_payload["messages"]
+    assert isinstance(messages, list)
+    system_prompt = messages[0]["content"]
+    assert '"calculation_type"' in system_prompt
+    assert '"model_name"' in system_prompt
+    assert "model_name may be null" in system_prompt
+    assert "Never calculate equilibrium numbers" in system_prompt
 
 
 @pytest.mark.asyncio

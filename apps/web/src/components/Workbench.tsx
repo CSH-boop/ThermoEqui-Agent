@@ -2,7 +2,7 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import { exportUrl, rerunTask, sendChat } from "@/lib/api";
-import type { CalculationEnvelope, ChatResponse, TaskManifest } from "@/lib/types";
+import type { AgentStep, CalculationEnvelope, ChatResponse, TaskManifest } from "@/lib/types";
 import { VleChart } from "./VleChart";
 
 type Tab = "chart" | "table" | "model" | "parameters" | "validation" | "runs";
@@ -22,6 +22,7 @@ export function Workbench() {
   const [task, setTask] = useState<TaskManifest>();
   const [calculation, setCalculation] = useState<CalculationEnvelope>();
   const [runs, setRuns] = useState<CalculationEnvelope[]>([]);
+  const [executionSteps, setExecutionSteps] = useState<AgentStep[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("chart");
   const [loading, setLoading] = useState(false);
   const [diagnostic, setDiagnostic] = useState<string>();
@@ -43,6 +44,7 @@ export function Workbench() {
     try {
       const response: ChatResponse = await sendChat(message, conversationId);
       setConversationId(response.conversation_id);
+      setExecutionSteps(response.execution_steps);
       setMessages((current) => [...current, { role: "agent", text: response.answer }]);
       if (response.task) setTask(response.task);
       if (response.calculation) {
@@ -135,6 +137,21 @@ export function Workbench() {
           <div><dt>计算</dt><dd>{calculation?.result.converged ? "已收敛" : "待运行"}</dd></div>
           <div><dt>验证</dt><dd>{calculation?.validation.overall_status ?? "待验证"}</dd></div>
         </dl>
+        {executionSteps.length > 0 && (
+          <section className="execution-trace" aria-label="Agent execution trace">
+            <p className="eyebrow">Plan · Execute · Validate</p>
+            {executionSteps.map((step) => (
+              <article key={`${step.phase}-${step.tool_name ?? "provider"}`}>
+                <span className={`step-status ${step.status}`} />
+                <div>
+                  <strong>{step.phase}</strong>
+                  {step.tool_name && <code>{step.tool_name}</code>}
+                  <p>{step.summary}</p>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
         <label className="field">模型<select aria-label="热力学模型" value={task?.model_name ?? "Ideal/Raoult"} onChange={(event) => updateModel(event.target.value)}><option>Ideal/Raoult</option><option>Wilson</option><option>NRTL</option><option>UNIQUAC</option><option>Peng-Robinson</option></select></label>
         <label className="field">压力 / kPa<input aria-label="压力 kPa" type="number" step="0.001" min="0.001" value={task?.conditions.pressure_kPa ?? ""} onChange={(event) => updatePressure(event.target.value)} /></label>
         <label className="field">温度 / K<input aria-label="温度 K" type="number" step="0.01" min="0.01" value={task?.conditions.temperature_K ?? ""} onChange={(event) => updateTemperature(event.target.value)} /></label>

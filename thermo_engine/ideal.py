@@ -18,7 +18,7 @@ from schemas.domain import (
     TaskManifest,
 )
 from thermo_engine.errors import ThermoEquiError
-from thermo_engine.properties import PureComponent, resolve_component
+from thermo_engine.properties import PureComponent, component_sources, resolve_component
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,9 @@ class IdealRaoultBackend:
 
     def __init__(self, tolerances: SolverTolerances | None = None) -> None:
         self.tolerances = tolerances or SolverTolerances()
+
+    def parameter_sources(self, request: TaskManifest) -> list[dict[str, str]]:
+        return component_sources(self._components(request))
 
     @staticmethod
     def _components(request: TaskManifest) -> list[PureComponent]:

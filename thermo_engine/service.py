@@ -5,7 +5,7 @@ from __future__ import annotations
 from schemas.domain import CalculationResult, FailureType, TaskManifest, ValidationReport
 from thermo_engine.backend import ThermodynamicBackend
 from thermo_engine.errors import ThermoEquiError
-from thermo_engine.ideal import IdealRaoultBackend
+from thermo_engine.registry import DEFAULT_BACKEND_REGISTRY
 from thermo_engine.validation import validate_result
 
 UNSUPPORTED_SCOPE_MARKERS = (
@@ -54,8 +54,9 @@ def calculate_equilibrium(
     """Execute one manifest without any LLM or frontend dependency."""
     if task_manifest.original_question is None:
         task_manifest = task_manifest.model_copy(update={"original_question": "Structured Python/CLI submission"})
+    task_manifest = DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
     _reject_unsupported_scope(task_manifest)
-    selected = backend or IdealRaoultBackend()
+    selected = backend or DEFAULT_BACKEND_REGISTRY.resolve(task_manifest)
     requested_model = (task_manifest.model_name or "Ideal/Raoult").casefold()
     if task_manifest.composition_basis == "mass_fraction":
         raise ThermoEquiError(
@@ -69,17 +70,6 @@ def calculate_equilibrium(
             FailureType.PARAMETER_OUT_OF_DOMAIN,
             "Ideal/Raoult is blocked above the configured low-pressure regime (500 kPa).",
             "Select a validated equation-of-state backend for this pressure.",
-        )
-    if requested_model not in {"ideal", "raoult", "ideal/raoult"}:
-        failure_type = (
-            FailureType.MISSING_PARAMETERS
-            if requested_model in {"wilson", "nrtl", "uniquac"}
-            else FailureType.UNSUPPORTED_MODEL
-        )
-        raise ThermoEquiError(
-            failure_type,
-            f"Model {task_manifest.model_name} has no resolved production parameter set/backend.",
-            "Import an evidence-bearing parameter set or choose Ideal/Raoult where applicable.",
         )
     operations = {
         "bubble_point": selected.bubble_point,
@@ -99,6 +89,16 @@ def calculate_equilibrium(
             "Choose a supported VLE/Flash calculation type.",
         )
     return operation(task_manifest)
+
+
+def resolve_backend(task_manifest: TaskManifest) -> ThermodynamicBackend:
+    """Resolve the deterministic backend without executing an operation."""
+    return DEFAULT_BACKEND_REGISTRY.resolve(task_manifest)
+
+
+def route_task_model(task_manifest: TaskManifest) -> TaskManifest:
+    """Return a manifest with a conservative deterministic model selection."""
+    return DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
 
 
 def validate_equilibrium_result(result: CalculationResult) -> ValidationReport:

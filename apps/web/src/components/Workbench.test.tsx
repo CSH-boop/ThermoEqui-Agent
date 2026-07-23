@@ -7,6 +7,22 @@ vi.mock("./VleChart", () => ({ VleChart: () => <div data-testid="vle-chart">char
 const response = {
   conversation_id: "conversation-1",
   intent: "EQUILIBRIUM_CALCULATION",
+  execution_steps: [
+    { phase: "plan", status: "completed", summary: "Structured task created." },
+    {
+      phase: "execute",
+      status: "completed",
+      summary: "Deterministic tool completed.",
+      tool_name: "phase_equilibrium",
+    },
+    {
+      phase: "validate",
+      status: "completed",
+      summary: "Validation passed.",
+      tool_name: "phase_equilibrium",
+    },
+    { phase: "respond", status: "completed", summary: "Grounded response created." },
+  ],
   answer: "计算完成。",
   statements: [{ category: "Calculation", text: "确定性结果" }],
   task: {
@@ -30,6 +46,8 @@ describe("Workbench", () => {
     await waitFor(() => expect(screen.getByText("计算完成。")).toBeInTheDocument());
     expect(screen.getByTestId("vle-chart")).toBeInTheDocument();
     expect(screen.getByText("Benzene / Toluene")).toBeInTheDocument();
+    expect(screen.getAllByText("phase_equilibrium")).toHaveLength(2);
+    expect(screen.getByText("Validation passed.")).toBeInTheDocument();
   });
   it("keeps API errors in the diagnostic panel", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: { message: "缺少参数" } }) }));

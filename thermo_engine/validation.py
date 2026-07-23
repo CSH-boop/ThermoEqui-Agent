@@ -17,20 +17,27 @@ def _composition_error(result: CalculationResult) -> float:
         *(point.vapor_composition for point in result.points),
         *(phase.composition for phase in result.phases),
     ]
-    if not compositions:
-        return 0.0
-    return max(
-        max(abs(sum(values) - 1.0), max((max(0.0, -x, x - 1.0) for x in values), default=0.0))
-        for values in compositions
+    composition_error = (
+        0.0
+        if not compositions
+        else max(
+            max(abs(sum(values) - 1.0), max((max(0.0, -x, x - 1.0) for x in values), default=0.0))
+            for values in compositions
+        )
     )
+    if not result.phases:
+        return composition_error
+    phase_fraction_error = max(
+        abs(sum(phase.fraction for phase in result.phases) - 1.0),
+        max(max(0.0, -phase.fraction, phase.fraction - 1.0) for phase in result.phases),
+    )
+    return max(composition_error, phase_fraction_error)
 
 
 def _material_error(result: CalculationResult) -> float:
     is_flash = result.calculation_type in {"tp_flash", "phase_stability"}
     if not result.phases or result.vapor_fraction is None:
         return 1.0 if is_flash else 0.0
-    if len(result.phases) != 2:
-        return 1.0
     if not is_flash:
         return 0.0
     snapshot = result.input_snapshot
@@ -68,7 +75,7 @@ def validate_result(result: CalculationResult) -> ValidationReport:
     composition_complete = not point_based or bool(result.points)
     is_flash = result.calculation_type in {"tp_flash", "phase_stability"}
     if is_flash:
-        composition_complete = len(result.phases) == 2
+        composition_complete = 1 <= len(result.phases) <= 2
     composition = CheckResult(
         passed=composition_complete and composition_error <= COMPOSITION_TOLERANCE,
         metric=composition_error,
