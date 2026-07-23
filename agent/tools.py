@@ -25,6 +25,9 @@ class EngineeringToolRegistry:
     def __init__(self, tools: tuple[EngineeringTool, ...]) -> None:
         self._tools = {tool.name: tool for tool in tools}
 
+    def catalog(self) -> list[dict[str, str]]:
+        return [{"name": tool.name, "description": tool.description} for tool in self._tools.values()]
+
     def execute(self, name: str, task: TaskManifest) -> CalculationEnvelope:
         tool = self._tools.get(name)
         if tool is None:

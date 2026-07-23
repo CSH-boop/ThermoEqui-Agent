@@ -177,6 +177,7 @@ def test_peng_robinson_tp_flash_matches_upstream_reference_case() -> None:
     assert result.vapor_fraction == pytest.approx(0.0890325, abs=2e-4)
     assert result.phases[0].composition == pytest.approx([0.974400, 0.019757, 0.005843], abs=2e-4)
     assert result.phases[1].composition == pytest.approx([0.868821, 0.000025766, 0.131154], abs=2e-4)
+    assert 1e-10 < result.residual < 1e-6
     assert report.material_balance.passed
     assert report.equilibrium_residual.passed
 
@@ -197,6 +198,51 @@ def test_peng_robinson_requires_reviewed_binary_parameters() -> None:
     assert captured.value.detail.failure_type == "missing_parameters"
     assert captured.value.detail.details["parameter_table"] == "ChemSep PR"
     assert captured.value.detail.details["missing_pairs"] == [["71-43-2", "108-88-3"]]
+
+
+def test_peng_robinson_rejects_strongly_associating_system() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="water", name="Water", cas_number="7732-18-5"),
+            ComponentIdentity(component_id="methanol", name="Methanol", cas_number="67-56-1"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=450.0,
+            pressure_kPa=1000.0,
+            feed_composition=[0.5, 0.5],
+        ),
+        model_name="Peng-Robinson",
+    )
+
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+
+    assert captured.value.detail.failure_type == "parameter_out_of_domain"
+    assert captured.value.detail.details["inapplicable_components"] == ["Water", "Methanol"]
+
+
+def test_automatic_routing_rejects_high_pressure_associating_system() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="water", name="Water", cas_number="7732-18-5"),
+            ComponentIdentity(component_id="methanol", name="Methanol", cas_number="67-56-1"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=450.0,
+            pressure_kPa=1000.0,
+            feed_composition=[0.5, 0.5],
+        ),
+        model_name=None,
+    )
+
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+
+    assert captured.value.detail.failure_type == "parameter_out_of_domain"
 
 
 def test_unset_model_routes_high_pressure_flash_to_peng_robinson() -> None:
@@ -221,7 +267,31 @@ def test_unset_model_routes_high_pressure_flash_to_peng_robinson() -> None:
 
     assert result.model_name == "Peng-Robinson"
     assert result.input_snapshot["model_name"] == "Peng-Robinson"
+    assert any("high-pressure" in item for item in result.input_snapshot["assumptions"])
     assert report.overall_status in {"passed", "warning"}
+
+
+def test_unset_model_routes_unregistered_light_gases_to_peng_robinson_at_low_pressure() -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH",
+        calculation_type="tp_flash",
+        components=[
+            ComponentIdentity(component_id="methane", name="Methane", cas_number="74-82-8"),
+            ComponentIdentity(component_id="ethane", name="Ethane", cas_number="74-84-0"),
+            ComponentIdentity(component_id="nitrogen", name="Nitrogen", cas_number="7727-37-9"),
+        ],
+        conditions=ThermodynamicConditions(
+            temperature_K=110.0,
+            pressure_kPa=100.0,
+            feed_composition=[0.965, 0.018, 0.017],
+        ),
+        model_name=None,
+    )
+
+    result = calculate_equilibrium(task)
+
+    assert result.model_name == "Peng-Robinson"
+    assert any("outside the local Ideal registry" in item for item in result.input_snapshot["assumptions"])
 
 
 def test_single_phase_peng_robinson_flash_passes_material_balance() -> None:
@@ -252,6 +322,54 @@ def test_single_phase_peng_robinson_flash_passes_material_balance() -> None:
     assert report.convergence.passed
 
 
+@pytest.mark.parametrize(
+    ("calculation_type", "conditions"),
+    [
+        (
+            "bubble_point",
+            ThermodynamicConditions(pressure_kPa=100.0, liquid_composition=[0.5, 0.5]),
+        ),
+        (
+            "dew_point",
+            ThermodynamicConditions(pressure_kPa=100.0, vapor_composition=[0.5, 0.5]),
+        ),
+        ("isobaric_vle", ThermodynamicConditions(pressure_kPa=100.0)),
+        ("isothermal_vle", ThermodynamicConditions(temperature_K=150.0)),
+        (
+            "phase_stability",
+            ThermodynamicConditions(
+                temperature_K=150.0,
+                pressure_kPa=100.0,
+                feed_composition=[0.5, 0.5],
+            ),
+        ),
+        ("azeotrope", ThermodynamicConditions(pressure_kPa=100.0)),
+    ],
+)
+def test_peng_robinson_advertised_operations_cross_public_validation_gate(
+    calculation_type: str,
+    conditions: ThermodynamicConditions,
+) -> None:
+    task = TaskManifest(
+        equilibrium_type="FLASH" if calculation_type == "phase_stability" else "VLE",
+        calculation_type=calculation_type,
+        components=[
+            ComponentIdentity(component_id="methane", name="Methane", cas_number="74-82-8"),
+            ComponentIdentity(component_id="ethane", name="Ethane", cas_number="74-84-0"),
+        ],
+        conditions=conditions,
+        model_name="Peng-Robinson",
+        points=5,
+    )
+
+    result = calculate_equilibrium(task)
+    report = validate_equilibrium_result(result)
+
+    assert result.backend_version.startswith("thermo/")
+    assert result.converged
+    assert report.overall_status in {"passed", "warning"}
+
+
 def test_structured_polymer_task_is_rejected_by_shared_service_guard() -> None:
     task = manifest(
         "bubble_point",
@@ -266,4 +384,28 @@ def test_structured_polymer_task_is_rejected_by_shared_service_guard() -> None:
     )
     with pytest.raises(ThermoEquiError) as captured:
         calculate_equilibrium(task)
+    assert captured.value.detail.failure_type == "unsupported_model"
+
+
+def test_original_question_cannot_be_hidden_by_an_incorrect_manifest() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.5, 0.5]),
+    ).model_copy(update={"original_question": "Calculate polymer solution VLE"})
+
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+
+    assert captured.value.detail.failure_type == "unsupported_model"
+
+
+def test_flowsheet_design_in_original_question_is_rejected() -> None:
+    task = manifest(
+        "bubble_point",
+        ThermodynamicConditions(pressure_kPa=101.325, liquid_composition=[0.5, 0.5]),
+    ).model_copy(update={"original_question": "Calculate VLE and design a flowsheet"})
+
+    with pytest.raises(ThermoEquiError) as captured:
+        calculate_equilibrium(task)
+
     assert captured.value.detail.failure_type == "unsupported_model"

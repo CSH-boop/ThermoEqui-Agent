@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from importlib.metadata import version
-from math import isfinite
+from math import isfinite, log
 from typing import Any, cast
 
 import numpy as np
@@ -25,9 +27,24 @@ class ThermoPengRobinsonBackend:
 
     version = f"thermo/{version('thermo')}"
     parameter_table = "ChemSep PR"
+    _allowlisted_light_gas_cas = frozenset(
+        {
+            "124-38-9",  # carbon dioxide
+            "630-08-0",  # carbon monoxide
+            "1333-74-0",  # hydrogen
+            "7727-37-9",  # nitrogen
+            "7782-44-7",  # oxygen
+            "7440-37-1",  # argon
+        }
+    )
 
-    @staticmethod
-    def parameter_sources(request: TaskManifest) -> list[dict[str, str]]:
+    def __init__(self) -> None:
+        self._parameter_set_id: str | None = None
+        self._parameter_sources: list[dict[str, str]] = []
+
+    def parameter_sources(self, request: TaskManifest) -> list[dict[str, str]]:
+        if self._parameter_sources:
+            return self._parameter_sources
         component_names = " / ".join(component.name for component in request.components)
         return [
             {
@@ -49,6 +66,30 @@ class ThermoPengRobinsonBackend:
                 "temperature_range_K": "temperature-independent",
             }
         ]
+
+    @classmethod
+    def _inapplicable_components(cls, constants: Any) -> list[str]:
+        inapplicable: list[str] = []
+        for name, cas_number, atoms in zip(
+            constants.names,
+            constants.CASs,
+            constants.atomss,
+            strict=True,
+        ):
+            elements = set(atoms)
+            is_hydrocarbon = "C" in elements and elements <= {"C", "H"}
+            if not is_hydrocarbon and cas_number not in cls._allowlisted_light_gas_cas:
+                inapplicable.append(str(name).title())
+        return inapplicable
+
+    @classmethod
+    def supports_system(cls, request: TaskManifest) -> bool:
+        identifiers = [component.cas_number or component.component_id for component in request.components]
+        try:
+            constants, _ = ChemicalConstantsPackage.from_IDs(identifiers)
+        except (ValueError, LookupError, TypeError):
+            return False
+        return not cls._inapplicable_components(constants)
 
     @staticmethod
     def _require_pressure(request: TaskManifest) -> float:
@@ -101,6 +142,14 @@ class ThermoPengRobinsonBackend:
                 {"components": identifiers},
             ) from None
 
+        inapplicable_components = self._inapplicable_components(constants)
+        if inapplicable_components:
+            raise ThermoEquiError(
+                FailureType.PARAMETER_OUT_OF_DOMAIN,
+                "The current Peng-Robinson adapter is limited to hydrocarbons and reviewed light gases.",
+                "Choose a validated association/activity-coefficient model for this system.",
+                {"inapplicable_components": inapplicable_components},
+            )
         missing_pairs = [
             [constants.CASs[i], constants.CASs[j]]
             for i in range(len(constants.CASs))
@@ -115,6 +164,45 @@ class ThermoPengRobinsonBackend:
                 {"model": "Peng-Robinson", "parameter_table": self.parameter_table, "missing_pairs": missing_pairs},
             )
         kijs = IPDB.get_ip_asymmetric_matrix(self.parameter_table, constants.CASs, "kij")
+        parameter_snapshot = {
+            "component_order": constants.CASs,
+            "matrix": kijs,
+            "parameter_form": "Peng-Robinson kij",
+            "source_table": self.parameter_table,
+            "thermo_version": self.version,
+            "units": "dimensionless",
+        }
+        snapshot_json = json.dumps(parameter_snapshot, sort_keys=True, separators=(",", ":"))
+        self._parameter_set_id = f"chemsep-pr:{hashlib.sha256(snapshot_json.encode()).hexdigest()}"
+        component_names = " / ".join(component.name for component in request.components)
+        self._parameter_sources = [
+            {
+                "component": component.name,
+                "property": "Pure-component constants and property correlations",
+                "source_title": "CalebBell/thermo",
+                "source_identifier": "https://github.com/CalebBell/thermo",
+                "source_version": self.version,
+                "temperature_range_K": "model-dependent",
+            }
+            for component in request.components
+        ] + [
+            {
+                "component": component_names,
+                "component_order": json.dumps(constants.CASs),
+                "property": "Peng-Robinson binary interaction parameter kij",
+                "parameter_form": "symmetric kij matrix",
+                "parameter_values": json.dumps(kijs),
+                "parameter_units": "dimensionless",
+                "parameter_set_id": self._parameter_set_id,
+                "quality_level": "upstream database snapshot; engineering review required",
+                "source_title": self.parameter_table,
+                "source_identifier": (
+                    "https://github.com/CalebBell/thermo/tree/master/thermo/Interaction%20Parameters/ChemSep"
+                ),
+                "source_version": self.version,
+                "temperature_range_K": "temperature-independent",
+            }
+        ]
         eos_kwargs = {
             "Pcs": constants.Pcs,
             "Tcs": constants.Tcs,
@@ -131,13 +219,22 @@ class ThermoPengRobinsonBackend:
             eos_kwargs=eos_kwargs,
             HeatCapacityGases=properties.HeatCapacityGases,
         )
-        return FlashVL(constants, properties, liquid=liquid, gas=gas)
+        flasher = FlashVL(constants, properties, liquid=liquid, gas=gas)
+        flasher.DEW_BUBBLE_NEWTON_XTOL = 1e-10
+        flasher.DEW_BUBBLE_QUASI_NEWTON_XTOL = 1e-10
+        return flasher
 
     @staticmethod
     def _convergence(solution: Any) -> tuple[float, int]:
-        convergence = solution.flash_convergence or {}
-        residual = abs(float(convergence.get("err", 0.0)))
-        iterations = int(convergence.get("iterations", 0))
+        convergence = solution.flash_convergence
+        if not isinstance(convergence, dict) or "err" not in convergence or "iterations" not in convergence:
+            raise ThermoEquiError(
+                FailureType.NUMERICAL_NONCONVERGENCE,
+                "The thermo flash solver returned no convergence diagnostics.",
+                "Do not use this result; review the solver specification and conditions.",
+            )
+        residual = abs(float(convergence["err"]))
+        iterations = int(convergence["iterations"])
         if not isfinite(residual):
             raise ThermoEquiError(
                 FailureType.NUMERICAL_NONCONVERGENCE,
@@ -145,6 +242,36 @@ class ThermoPengRobinsonBackend:
                 "Review conditions, component data, and model applicability.",
             )
         return residual, iterations
+
+    @staticmethod
+    def _equilibrium_residual(solution: Any) -> float:
+        """Independently check component fugacity equality for a returned phase pair."""
+        liquid_phase = getattr(solution, "liquid0", None)
+        gas_phase = getattr(solution, "gas", None)
+        if liquid_phase is None or gas_phase is None:
+            return 0.0
+        liquid_fugacities = liquid_phase.fugacities()
+        vapor_fugacities = gas_phase.fugacities()
+        if len(liquid_fugacities) != len(vapor_fugacities):
+            raise ThermoEquiError(
+                FailureType.PHYSICAL_VALIDATION_FAILURE,
+                "The returned phase fugacity vectors have incompatible sizes.",
+                "Do not use this result; review the solver output.",
+            )
+        residuals: list[float] = []
+        for liquid, vapor in zip(liquid_fugacities, vapor_fugacities, strict=True):
+            liquid_value = float(liquid)
+            vapor_value = float(vapor)
+            if abs(liquid_value) <= 1e-30 and abs(vapor_value) <= 1e-30:
+                continue
+            if liquid_value <= 0.0 or vapor_value <= 0.0 or not isfinite(liquid_value) or not isfinite(vapor_value):
+                raise ThermoEquiError(
+                    FailureType.PHYSICAL_VALIDATION_FAILURE,
+                    "The returned phase fugacities are non-positive or non-finite.",
+                    "Do not use this result; review conditions, properties, and model applicability.",
+                )
+            residuals.append(abs(log(liquid_value / vapor_value)))
+        return max(residuals, default=0.0)
 
     def _flash(self, request: TaskManifest, **specifications: object) -> Any:
         try:
@@ -160,19 +287,21 @@ class ThermoPengRobinsonBackend:
 
     @staticmethod
     def _point(solution: Any) -> EquilibriumPoint:
-        if solution.liquid0 is None or solution.gas is None:
+        liquid_phase = getattr(solution, "liquid0", None)
+        gas_phase = getattr(solution, "gas", None)
+        if liquid_phase is None or gas_phase is None:
             raise ThermoEquiError(
                 FailureType.PHYSICAL_VALIDATION_FAILURE,
                 "A requested phase-boundary calculation did not return both phases.",
                 "Review the phase specification and model applicability.",
             )
-        residual, _ = ThermoPengRobinsonBackend._convergence(solution)
+        ThermoPengRobinsonBackend._convergence(solution)
         return EquilibriumPoint(
             temperature_K=float(solution.T),
             pressure_kPa=float(solution.P) / 1000.0,
-            liquid_composition=[float(value) for value in solution.liquid0.zs],
-            vapor_composition=[float(value) for value in solution.gas.zs],
-            equilibrium_residual=residual,
+            liquid_composition=[float(value) for value in liquid_phase.zs],
+            vapor_composition=[float(value) for value in gas_phase.zs],
+            equilibrium_residual=ThermoPengRobinsonBackend._equilibrium_residual(solution),
         )
 
     def _result(
@@ -183,23 +312,26 @@ class ThermoPengRobinsonBackend:
         points: list[EquilibriumPoint] | None = None,
         warnings: list[str] | None = None,
     ) -> CalculationResult:
-        residual, iterations = self._convergence(solution)
+        solver_residual, iterations = self._convergence(solution)
+        equilibrium_residual = self._equilibrium_residual(solution)
         phases: list[PhaseResult] = []
         vapor_fraction = float(solution.VF)
-        if solution.liquid0 is not None:
+        liquid_phase = getattr(solution, "liquid0", None)
+        gas_phase = getattr(solution, "gas", None)
+        if liquid_phase is not None:
             phases.append(
                 PhaseResult(
                     phase="liquid",
                     fraction=1.0 - vapor_fraction,
-                    composition=[float(value) for value in solution.liquid0.zs],
+                    composition=[float(value) for value in liquid_phase.zs],
                 )
             )
-        if solution.gas is not None:
+        if gas_phase is not None:
             phases.append(
                 PhaseResult(
                     phase="vapor",
                     fraction=vapor_fraction,
-                    composition=[float(value) for value in solution.gas.zs],
+                    composition=[float(value) for value in gas_phase.zs],
                 )
             )
         phase_state = "liquid" if vapor_fraction <= 1e-12 else "vapor" if vapor_fraction >= 1.0 - 1e-12 else "two_phase"
@@ -208,16 +340,20 @@ class ThermoPengRobinsonBackend:
             calculation_type=request.calculation_type,
             input_snapshot=request.model_dump(mode="json"),
             model_name="Peng-Robinson",
+            parameter_set_id=self._parameter_set_id,
             points=points or [],
             phases=phases,
             temperature_K=float(solution.T),
             pressure_kPa=float(solution.P) / 1000.0,
             vapor_fraction=vapor_fraction,
             phase_state=phase_state,
-            converged=True,
-            residual=residual,
+            converged=solver_residual <= 1e-6,
+            residual=equilibrium_residual,
             iterations=iterations,
-            warnings=warnings or [],
+            warnings=[
+                "ChemSep PR parameter applicability requires engineering review.",
+                *(warnings or []),
+            ],
             backend_version=self.version,
             solver_name="thermo.FlashVL / PRMIX",
         )
@@ -244,6 +380,7 @@ class ThermoPengRobinsonBackend:
         pressure = self._require_pressure(request)
         points: list[EquilibriumPoint] = []
         iterations = 0
+        converged = True
         for fraction in np.linspace(0.0, 1.0, request.points):
             solution = self._flash(
                 request,
@@ -252,19 +389,22 @@ class ThermoPengRobinsonBackend:
                 zs=[float(fraction), float(1.0 - fraction)],
             )
             points.append(self._point(solution))
-            _, point_iterations = self._convergence(solution)
+            solver_residual, point_iterations = self._convergence(solution)
+            converged = converged and solver_residual <= 1e-6
             iterations += point_iterations
         return CalculationResult(
             task_id=request.task_id,
             calculation_type=request.calculation_type,
             input_snapshot=request.model_dump(mode="json"),
             model_name="Peng-Robinson",
+            parameter_set_id=self._parameter_set_id,
             points=points,
             pressure_kPa=pressure,
             phase_state="curve",
-            converged=True,
+            converged=converged,
             residual=max(point.equilibrium_residual for point in points),
             iterations=iterations,
+            warnings=["ChemSep PR parameter applicability requires engineering review."],
             backend_version=self.version,
             solver_name="thermo.FlashVL / PRMIX",
         )
@@ -279,6 +419,7 @@ class ThermoPengRobinsonBackend:
         temperature = self._require_temperature(request)
         points: list[EquilibriumPoint] = []
         iterations = 0
+        converged = True
         for fraction in np.linspace(0.0, 1.0, request.points):
             solution = self._flash(
                 request,
@@ -287,19 +428,22 @@ class ThermoPengRobinsonBackend:
                 zs=[float(fraction), float(1.0 - fraction)],
             )
             points.append(self._point(solution))
-            _, point_iterations = self._convergence(solution)
+            solver_residual, point_iterations = self._convergence(solution)
+            converged = converged and solver_residual <= 1e-6
             iterations += point_iterations
         return CalculationResult(
             task_id=request.task_id,
             calculation_type=request.calculation_type,
             input_snapshot=request.model_dump(mode="json"),
             model_name="Peng-Robinson",
+            parameter_set_id=self._parameter_set_id,
             points=points,
             temperature_K=temperature,
             phase_state="curve",
-            converged=True,
+            converged=converged,
             residual=max(point.equilibrium_residual for point in points),
             iterations=iterations,
+            warnings=["ChemSep PR parameter applicability requires engineering review."],
             backend_version=self.version,
             solver_name="thermo.FlashVL / PRMIX",
         )

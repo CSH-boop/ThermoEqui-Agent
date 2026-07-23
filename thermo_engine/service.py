@@ -25,6 +25,12 @@ UNSUPPORTED_SCOPE_MARKERS = (
     "sle",
     "vlle",
     "column design",
+    "flowsheet",
+    "flowsheet design",
+    "process flowsheet design",
+    "design a flowsheet",
+    "design the flowsheet",
+    "流程设计",
     "精馏塔设计",
 )
 
@@ -33,6 +39,7 @@ def _reject_unsupported_scope(task_manifest: TaskManifest) -> None:
     searchable = " ".join(
         [
             task_manifest.calculation_type,
+            task_manifest.original_question or "",
             *(
                 value
                 for component in task_manifest.components
@@ -54,7 +61,8 @@ def calculate_equilibrium(
     """Execute one manifest without any LLM or frontend dependency."""
     if task_manifest.original_question is None:
         task_manifest = task_manifest.model_copy(update={"original_question": "Structured Python/CLI submission"})
-    task_manifest = DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
+    if task_manifest.model_name is None:
+        task_manifest = DEFAULT_BACKEND_REGISTRY.route_task(task_manifest)
     _reject_unsupported_scope(task_manifest)
     selected = backend or DEFAULT_BACKEND_REGISTRY.resolve(task_manifest)
     requested_model = (task_manifest.model_name or "Ideal/Raoult").casefold()

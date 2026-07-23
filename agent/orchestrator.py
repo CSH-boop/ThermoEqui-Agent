@@ -54,6 +54,12 @@ class DeterministicProvider:
             "多晶",
             "polymorph",
             "复杂临界",
+            "流程设计",
+            "flowsheet",
+            "flowsheet design",
+            "process flowsheet design",
+            "design a flowsheet",
+            "design the flowsheet",
             "精馏塔设计",
             "full column design",
             "反应相平衡",
@@ -135,6 +141,18 @@ class DeterministicProvider:
         else:
             text = "当前离线知识库可解释模型与验证原则；数值问题必须交给确定性热力学工具。"
         return [EvidenceStatement(category="Knowledge", text=text)]
+
+    async def select_tool(
+        self,
+        message: str,
+        task: TaskManifest,
+        available_tools: list[dict[str, str]],
+    ) -> str:
+        del message, task
+        allowed_names = {tool["name"] for tool in available_tools}
+        if "phase_equilibrium" not in allowed_names:
+            raise LLMProviderOutputError("No deterministic phase-equilibrium tool is available.")
+        return "phase_equilibrium"
 
     async def interpret_result(self, result: dict[str, object]) -> list[EvidenceStatement]:
         status = result.get("validation_status", "unknown")
@@ -247,6 +265,7 @@ class ConversationOrchestrator:
                 answer="缺少可识别的组分，尚未执行计算。",
                 statements=[EvidenceStatement(category="Warning", text="需要明确组分身份。")],
             )
+        task = task.model_copy(update={"original_question": message})
         state.task = task
         required_missing = self._missing_conditions(task)
         if required_missing:
@@ -261,9 +280,10 @@ class ConversationOrchestrator:
             plan_step = AgentStep(
                 phase="plan",
                 status="completed",
-                summary="A structured task manifest was created with explicit components, conditions, and model.",
+                summary="A structured task manifest was created and an allowlisted tool was selected.",
             )
-            envelope = self.tools.execute("phase_equilibrium", task)
+            tool_name = await self.provider.select_tool(message, task, self.tools.catalog())
+            envelope = self.tools.execute(tool_name, task)
             result = envelope.result
             validation = envelope.validation
             state.run_ids.append(envelope.result.run_id)
@@ -284,13 +304,13 @@ class ConversationOrchestrator:
                         phase="execute",
                         status="completed",
                         summary="The registered deterministic phase-equilibrium tool completed.",
-                        tool_name="phase_equilibrium",
+                        tool_name=tool_name,
                     ),
                     AgentStep(
                         phase="validate",
                         status="completed" if validation.overall_status != "failed" else "failed",
                         summary=f"Independent physical validation status: {validation.overall_status}.",
-                        tool_name="phase_equilibrium",
+                        tool_name=tool_name,
                     ),
                     AgentStep(
                         phase="respond",

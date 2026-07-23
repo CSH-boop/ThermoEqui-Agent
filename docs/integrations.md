@@ -5,8 +5,9 @@
 ThermoEqui-Agent keeps its FastAPI/Next.js product shell and selectively adopts the tool-oriented
 agent boundary demonstrated by
 [datamllab/CAi_copilot](https://github.com/datamllab/CAi_copilot). No CAi_copilot source code is
-vendored. DeepSeek classifies and formulates a typed task, then may choose only a reviewed
-engineering tool. Arbitrary Bash, Python, and notebook tools are intentionally excluded.
+vendored. DeepSeek classifies and formulates a typed task, then selects one tool from registry
+metadata using a JSON-only allowlisted contract. The current bounded loop permits one tool
+execution per turn. Arbitrary Bash, Python, and notebook tools are intentionally excluded.
 
 Deterministic Peng-Robinson calculations use the pinned
 [`thermo==0.6.1`](https://github.com/CalebBell/thermo) package through a local adapter. Upstream
@@ -31,7 +32,7 @@ The UI exposes these four high-level audit steps. It does not expose model chain
 | Model | Backend | Current executable scope | Parameter policy | Status |
 |---|---|---|---|---|
 | Ideal/Raoult | Internal deterministic solver | Binary bubble/dew, isobaric/isothermal VLE, TP flash, azeotrope candidate search | Reviewed local pure-property correlations | Available, low-pressure baseline |
-| Peng-Robinson | CalebBell/thermo adapter | Bubble/dew, binary VLE curves, TP flash, phase-state classification, azeotrope candidate search | Pure properties from thermo; every binary pair must exist in ChemSep PR | Available |
+| Peng-Robinson | CalebBell/thermo adapter | Hydrocarbon/allowlisted light-gas bubble/dew, binary VLE curves, TP flash, phase-state classification, azeotrope candidate search | Pure properties from thermo; every binary pair must exist in ChemSep PR; exact matrix/order/form/units/version are snapshotted and hashed; engineering applicability review remains required | Available |
 | Wilson | Planned activity-coefficient adapter | VLE contract | Reviewed directional binary parameters required | Contract only |
 | NRTL | Planned activity-coefficient adapter | VLE/LLE contract | Reviewed directional binary parameters required | Contract only |
 | UNIQUAC | Planned activity-coefficient adapter | VLE/LLE contract | Reviewed binary parameters and structural constants required | Contract only |
@@ -45,11 +46,6 @@ Add another model or engine by implementing `ThermodynamicBackend`, registering 
 supported calculations in `ThermodynamicBackendRegistry`, providing evidence-bearing parameter
 sources, and adding behavioral tests at `calculate_equilibrium` or the HTTP calculation endpoint.
 Do not couple DeepSeek prompts or frontend components to an upstream engine object.
-
-Potential later adapters include Phasepy for activity-coefficient/EOS mixing workflows,
-Clapeyron.jl for broader research-grade equations of state, and NeqSim for industrial JVM
-workflows. Each remains a separate adapter and must pass the same parameter and validation gates
-before being marked available.
 
 ## Deliberate v0.1 boundary
 

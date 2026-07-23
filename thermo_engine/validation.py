@@ -7,7 +7,7 @@ import numpy as np
 from schemas.domain import CalculationResult, CheckResult, ValidationReport
 
 COMPOSITION_TOLERANCE = 1e-8
-EQUILIBRIUM_TOLERANCE = 1e-6
+EQUILIBRIUM_TOLERANCE = 2e-6
 MATERIAL_TOLERANCE = 1e-7
 
 

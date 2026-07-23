@@ -17,6 +17,13 @@ class LLMProvider(Protocol):
 
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None: ...
 
+    async def select_tool(
+        self,
+        message: str,
+        task: TaskManifest,
+        available_tools: list[dict[str, str]],
+    ) -> str: ...
+
     async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]: ...
 
     async def interpret_result(self, result: dict[str, object]) -> list[EvidenceStatement]: ...
@@ -75,6 +82,10 @@ class _DeepSeekChoice(BaseModel):
 
 class _DeepSeekChatCompletion(BaseModel):
     choices: list[_DeepSeekChoice] = Field(min_length=1)
+
+
+class _ToolSelection(BaseModel):
+    tool_name: str
 
 
 def _contains_ungrounded_claim(text: str) -> bool:
@@ -159,6 +170,42 @@ class ConstrainedLLMProvider:
         if _contains_ungrounded_claim(value):
             return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
         return [EvidenceStatement(category="Knowledge", text=value)]
+
+    async def select_tool(
+        self,
+        message: str,
+        task: TaskManifest,
+        available_tools: list[dict[str, str]],
+    ) -> str:
+        allowed_names = {tool["name"] for tool in available_tools}
+        selection_schema = json.dumps(
+            _ToolSelection.model_json_schema(),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        planning_input = json.dumps(
+            {
+                "user_message": message,
+                "task": task.model_dump(mode="json"),
+                "available_tools": available_tools,
+            },
+            ensure_ascii=False,
+        )
+        value = await self._request(
+            "Select exactly one allowlisted engineering tool for this task. "
+            "Return only the JSON object; do not provide reasoning or calculate any result. "
+            f"Selection JSON Schema: {selection_schema}",
+            planning_input,
+            json_mode=True,
+            max_tokens=64,
+        )
+        try:
+            selection = _ToolSelection.model_validate_json(value)
+        except ValidationError:
+            raise LLMProviderOutputError("External provider returned an invalid tool selection.") from None
+        if selection.tool_name not in allowed_names:
+            raise LLMProviderOutputError("External provider selected a tool outside the allowlist.")
+        return selection.tool_name
 
     async def interpret_result(self, result: dict[str, object]) -> list[EvidenceStatement]:
         grounded_source = json.dumps(result, ensure_ascii=False)

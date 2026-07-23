@@ -9,6 +9,7 @@ from schemas.domain import FailureType, TaskManifest
 from thermo_engine.backend import ThermodynamicBackend
 from thermo_engine.errors import ThermoEquiError
 from thermo_engine.ideal import IdealRaoultBackend
+from thermo_engine.properties import resolve_component
 from thermo_engine.thermo_backend import ThermoPengRobinsonBackend
 
 
@@ -42,8 +43,41 @@ class ThermodynamicBackendRegistry:
                 "Select NRTL or UNIQUAC and import reviewed binary parameters.",
             )
         pressure = task.conditions.pressure_kPa
-        selected = "Peng-Robinson" if pressure is not None and pressure > 500.0 else "Ideal/Raoult"
-        return task.model_copy(update={"model_name": selected})
+        ideal_components_available = True
+        for component in task.components:
+            try:
+                resolve_component(component)
+            except ThermoEquiError:
+                ideal_components_available = False
+                break
+        peng_robinson_applicable = ThermoPengRobinsonBackend.supports_system(task)
+        if pressure is not None and pressure > 500.0:
+            if not peng_robinson_applicable:
+                raise ThermoEquiError(
+                    FailureType.PARAMETER_OUT_OF_DOMAIN,
+                    "No available production backend is applicable to this high-pressure system.",
+                    "Choose a reviewed association/activity-coefficient/EOS model with evidence-bearing parameters.",
+                )
+            selected = "Peng-Robinson"
+            reason = "Peng-Robinson was selected for an allowlisted high-pressure hydrocarbon/light-gas system."
+        elif ideal_components_available:
+            selected = "Ideal/Raoult"
+            reason = "Ideal/Raoult was selected within its reviewed low-pressure pure-property registry."
+        elif peng_robinson_applicable:
+            selected = "Peng-Robinson"
+            reason = "Peng-Robinson was selected because the components are outside the local Ideal registry."
+        else:
+            raise ThermoEquiError(
+                FailureType.PARAMETER_OUT_OF_DOMAIN,
+                "No available production backend is applicable to this component set.",
+                "Select an implemented model with reviewed properties and interaction parameters.",
+            )
+        return task.model_copy(
+            update={
+                "model_name": selected,
+                "assumptions": [*task.assumptions, reason],
+            }
+        )
 
     def resolve(self, task: TaskManifest) -> ThermodynamicBackend:
         requested = self.route_task(task).model_name or "Ideal/Raoult"

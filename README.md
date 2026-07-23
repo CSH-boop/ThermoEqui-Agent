@@ -11,7 +11,8 @@ Flash 和曲线数据均来自可脱离 LLM 独立运行的 `thermo_engine`，�
 ## 当前能力
 
 - 二元等压 T-x-y、等温 P-x-y、泡点、露点、TP Flash、共沸候选搜索和基础相态分类。
-- Ideal/Raoult 真实可运行后端，以及 Wilson、NRTL、UNIQUAC、Peng–Robinson 模型卡和路由规则。
+- Ideal/Raoult 内部后端与基于 `thermo` 的 Peng–Robinson 可运行后端；Wilson、NRTL、UNIQUAC
+  当前保留模型卡和类型化集成契约。
 - 参数缺失硬失败；参数方向、来源、形式、单位和适用域可追溯；测试参数禁止写入生产库。
 - 中文确定性 Agent：任务解析、常压规范化、多轮条件修正、知识问答和超范围拒绝。
 - FastAPI/OpenAPI、统一错误、request ID、SQLite 运行快照、JSON/CSV 导出。
@@ -28,15 +29,20 @@ VLLE 和完整精馏塔设计会被明确拒绝。NRTL/UNIQUAC 二元 LLE 当前
 flowchart LR
   UI[Next.js workbench] --> API[FastAPI]
   API --> Agent[Conversation orchestrator]
-  Agent --> Provider[Deterministic / OpenAI provider]
-  Agent --> Router[Rule-based model router]
-  Agent --> Engine[ThermodynamicBackend]
+  Agent --> Provider[DeepSeek / deterministic provider]
+  Agent --> Tools[Constrained engineering tools]
+  Tools --> Router[Applicability router]
+  Tools --> Engine[Backend registry]
   Engine --> Ideal[Ideal/Raoult adapter]
+  Engine --> PR[thermo Peng-Robinson adapter]
   Engine --> Validator[Physical validation gate]
   API --> DB[(SQLite / PostgreSQL-ready)]
   Router --> Cards[Reviewed model cards]
   Engine --> Evidence[Property and parameter evidence]
 ```
+
+Agent 与确定性热力学框架的集成边界、模型状态矩阵和扩展方式见
+[docs/integrations.md](docs/integrations.md)。
 
 核心入口可在无前端、无 API、无 LLM 时直接调用：
 
@@ -152,9 +158,12 @@ python -m thermo_engine.cli examples/benzene_toluene_isobaric.json --output run.
 
 ## 已知限制
 
-- 首个生产计算 Backend 是 Ideal/Raoult；非理想和高压模型卡不等同于可执行求解器。
-- 本地纯物性注册表当前仅审定苯和甲苯；未知组分返回 `missing_data`。
-- 相稳定性当前为 K 值相态分类，不是完整 tangent-plane-distance 分析，并会显式警告。
+- 当前可执行 Backend 为低压基线 Ideal/Raoult 与 Peng–Robinson；Wilson、NRTL、UNIQUAC
+  仍是合同层，不会执行或生成假参数。
+- Ideal/Raoult 的本地纯物性注册表当前仅审定苯和甲苯；Peng–Robinson 组分由 `thermo`
+  解析，但每个二元对都必须有 ChemSep PR `kij`，否则返回 `missing_parameters`。
+- 独立验证器尚未把完整 tangent-plane-distance 证据建模为可通过检查，因此 Flash
+  结果会保留相稳定性警告。
 - Antoine 关联式不是实验数据集；演示验证的是计算闭环和物理约束，不代表工业设计验证。
 - OpenAI Provider 需要联网和有效 Key；确定性计算不需要。
 - PostgreSQL 采用 SQLAlchemy 兼容设计，部署时仍需安装所选数据库驱动并建立正式迁移流程。

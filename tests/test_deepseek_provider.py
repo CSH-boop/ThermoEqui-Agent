@@ -12,7 +12,7 @@ import yaml
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
 from agent.providers import DeepSeekProvider, LLMProviderError, LLMProviderOutputError
 from apps.api.main import configured_provider
-from schemas.domain import Intent
+from schemas.domain import Intent, TaskManifest
 
 
 @pytest.mark.asyncio
@@ -139,6 +139,35 @@ async def test_deepseek_provider_requests_json_mode_for_task_manifests() -> None
 
 
 @pytest.mark.asyncio
+async def test_deepseek_provider_rejects_tool_outside_allowlist() -> None:
+    async def respond(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": '{"tool_name":"python_shell"}'}}]},
+        )
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    task = TaskManifest.model_validate(
+        {
+            "equilibrium_type": "VLE",
+            "calculation_type": "isobaric_vle",
+            "components": [{"component_id": "benzene", "name": "Benzene"}],
+            "conditions": {"pressure_kPa": 101.325},
+        }
+    )
+
+    with pytest.raises(LLMProviderOutputError):
+        await provider.select_tool(
+            "计算汽液平衡",
+            task,
+            [{"name": "phase_equilibrium", "description": "Deterministic phase equilibrium"}],
+        )
+
+
+@pytest.mark.asyncio
 async def test_deepseek_provider_withholds_ungrounded_numbers_and_citations() -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
         return httpx.Response(
@@ -243,6 +272,7 @@ async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_re
     responses = [
         "EQUILIBRIUM_CALCULATION",
         json.dumps(task_payload),
+        json.dumps({"tool_name": "phase_equilibrium"}),
         "计算结果已通过确定性验证。",
     ]
     requests: list[dict[str, object]] = []
@@ -264,6 +294,8 @@ async def test_deepseek_orchestration_uses_real_engine_and_receives_validated_re
     assert response.calculation is not None
     assert len(response.calculation.result.points) == 21
     assert response.calculation.validation.overall_status in {"passed", "warning"}
-    interpretation_input = json.loads(requests[2]["messages"][1]["content"])  # type: ignore[index]
+    tool_selection_input = json.loads(requests[2]["messages"][1]["content"])  # type: ignore[index]
+    assert tool_selection_input["available_tools"][0]["name"] == "phase_equilibrium"
+    interpretation_input = json.loads(requests[3]["messages"][1]["content"])  # type: ignore[index]
     assert len(interpretation_input["result"]["points"]) == 21
     assert interpretation_input["validation"]["overall_status"] in {"passed", "warning"}

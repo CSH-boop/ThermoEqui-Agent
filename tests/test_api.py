@@ -131,9 +131,15 @@ def test_peng_robinson_api_returns_thermo_and_chemsep_provenance() -> None:
     assert response.status_code == 200
     payload = response.json()
     assert payload["result"]["backend_version"].startswith("thermo/")
+    assert payload["result"]["parameter_set_id"].startswith("chemsep-pr:")
     assert payload["validation"]["material_balance"]["passed"]
     assert any(source["source_title"] == "ChemSep PR" for source in payload["parameter_sources"])
     assert any(source["source_title"] == "CalebBell/thermo" for source in payload["parameter_sources"])
+    interaction_source = next(
+        source for source in payload["parameter_sources"] if source["source_title"] == "ChemSep PR"
+    )
+    assert '"74-82-8"' in interaction_source["component_order"]
+    assert interaction_source["parameter_set_id"] == payload["result"]["parameter_set_id"]
     recommendation = next(item for item in payload["model_recommendations"] if item["model_name"] == "Peng-Robinson")
     assert recommendation["executable"]
 
