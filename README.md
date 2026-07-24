@@ -5,6 +5,10 @@
 > A conversational agent for knowledge-grounded and physically verified engineering
 > phase-equilibrium modeling.
 
+新成员可先阅读[工程目录与文件说明](docs/repository-guide.zh-CN.md)；团队开发规则见
+[CONTRIBUTING.md](CONTRIBUTING.md)、[团队分工与交付规范](docs/team-responsibilities.zh-CN.md)和
+[GitHub 团队协作设置](docs/github-collaboration.zh-CN.md)。
+
 ThermoEqui-Agent 不是让大模型“心算”相平衡。LLM 只负责语义、编排和解释；所有泡点、露点、相组成、
 Flash 和曲线数据均来自可脱离 LLM 独立运行的 `thermo_engine`，并经过独立验证器。
 

@@ -1,0 +1,54 @@
+name: 模型或计算后端集成
+description: 提议新增热力学模型、参数源或第三方计算后端
+title: "[Model] "
+labels:
+  - thermodynamics
+body:
+  - type: input
+    id: model
+    attributes:
+      label: 模型 / 后端
+      placeholder: Wilson、NRTL、Phasepy/Cubic、Clapeyron/PC-SAFT
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: 目标物系和计算范围
+      description: 写明组分类别、相态、温压范围和 bubble/dew/VLE/Flash/LLE 等任务。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 参数与物性来源
+      description: 列出可审查的数据源、参数形式、单位、方向、版本和许可证；不能填写猜测值。
+    validations:
+      required: true
+  - type: textarea
+    id: validation
+    attributes:
+      label: 验证基准
+      description: 给出论文、手册、上游库测试或实验数据，以及允许的误差。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 验收标准
+      placeholder: |
+        - 实现 ThermodynamicBackend
+        - 缺参返回 missing_parameters
+        - 通过公共边界行为测试
+        - 通过独立物理验证
+    validations:
+      required: true
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: 边界确认
+      options:
+        - label: 目标属于当前非电解质分子体系范围，或已明确标记为后续版本提案
+          required: true
+        - label: 不会使用 LLM 生成计算值、参数、实验数据或引用
+          required: true

@@ -93,6 +93,20 @@ def test_api_configuration_selects_deepseek_provider(monkeypatch: pytest.MonkeyP
     assert provider.base_url == "https://api.deepseek.com"
 
 
+def test_deepseek_provider_uses_system_https_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "agent.providers.urllib.request.getproxies",
+        lambda: {
+            "http": "http://127.0.0.1:7890",
+            "https": "http://127.0.0.1:7897",
+        },
+    )
+
+    provider = DeepSeekProvider(api_key="test-key")
+
+    assert provider.proxy_url == "http://127.0.0.1:7897"
+
+
 def test_api_configuration_without_deepseek_key_falls_back_safely(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LLM_PROVIDER", "deepseek")
     monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)

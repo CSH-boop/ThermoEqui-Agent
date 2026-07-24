@@ -38,6 +38,46 @@ COMPONENT_PATTERNS = (
     ("carbon-dioxide", "Carbon dioxide", "124-38-9", ("二氧化碳", "carbon dioxide", "co2")),
 )
 
+_NUMBER_PATTERN = r"(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
+_EXPLICIT_COMPOSITION_PATTERN = re.compile(
+    (
+        r"(?:feed[_\s-]*composition|feed\s+(?:mole|molar)\s+(?:composition|fractions?)|"
+        r"mole\s+fractions?|molar\s+composition|进料(?:摩尔)?组成|摩尔组成|组成)"
+        r"\s*(?:is|=|:|：|为)?\s*\[?\s*"
+        rf"(?P<values>{_NUMBER_PATTERN}(?:\s*(?:,|，|、)\s*{_NUMBER_PATTERN})+)"
+        r"\s*\]?"
+    ),
+    re.IGNORECASE,
+)
+_MODEL_COMPARISON_MARKERS = (
+    "区别",
+    "有什么不同",
+    "比较",
+    "difference",
+    "compare",
+    "comparison",
+    "versus",
+)
+_MODEL_TOPIC_MARKERS = (
+    "模型",
+    "后端",
+    "状态方程",
+    "活度系数",
+    "backend",
+    "model",
+    "equation of state",
+    "activity coefficient",
+    "thermo",
+    "phasepy",
+    "clapeyron",
+    "nrtl",
+    "peng-robinson",
+    "peng–robinson",
+    "wilson",
+    "uniquac",
+    "raoult",
+)
+
 
 def _mentioned_components(message: str) -> list[ComponentIdentity]:
     lower = message.casefold()
@@ -77,6 +117,20 @@ def _mentioned_components(message: str) -> list[ComponentIdentity]:
         )
         seen_components.add(component.component_id)
     return [component for _, _, component in selected]
+
+
+def _explicit_composition(message: str) -> list[float] | None:
+    match = _EXPLICIT_COMPOSITION_PATTERN.search(message)
+    if match is None:
+        return None
+    return [float(value) for value in re.findall(_NUMBER_PATTERN, match.group("values"), flags=re.IGNORECASE)]
+
+
+def _is_model_comparison_question(message: str) -> bool:
+    lower = message.casefold()
+    return any(marker in lower for marker in _MODEL_COMPARISON_MARKERS) and any(
+        marker in lower for marker in _MODEL_TOPIC_MARKERS
+    )
 
 
 def _token_span(message: str, token: str) -> tuple[int, int] | None:
@@ -223,6 +277,8 @@ class DeterministicProvider:
             return Intent.PARAMETER_QUERY
         if any(word in lower for word in ("数据", "database", "data query")):
             return Intent.DATA_QUERY
+        if _is_model_comparison_question(message):
+            return Intent.MODEL_SELECTION_QA
         if any(word in lower for word in ("计算", "曲线", "flash", "泡点", "露点", "共沸", "vle", "lle", "液液")):
             return Intent.EQUILIBRIUM_CALCULATION
         if any(word in lower for word in ("区别", "选择", "模型", "difference", "select")):
@@ -468,9 +524,16 @@ class ConversationOrchestrator:
         if deterministic_intent == Intent.UNSUPPORTED_TASK:
             return deterministic_intent
         try:
-            return await self.provider.classify_intent(message)
+            provider_intent = await self.provider.classify_intent(message)
         except LLMProviderOutputError:
             return deterministic_intent
+        if (
+            deterministic_intent == Intent.MODEL_SELECTION_QA
+            and provider_intent == Intent.EQUILIBRIUM_CALCULATION
+            and _is_model_comparison_question(message)
+        ):
+            return deterministic_intent
+        return provider_intent
 
     @classmethod
     def _prepare_task(
@@ -503,6 +566,20 @@ class ConversationOrchestrator:
         else:
             raise LLMProviderOutputError("No component identity could be resolved independently from the user message.")
         grounded = cls._align_task_components(task, expected_components)
+        explicit_composition = _explicit_composition(message)
+        composition_field = {
+            "tp_flash": "feed_composition",
+            "bubble_point": "liquid_composition",
+            "dew_point": "vapor_composition",
+        }.get(grounded.calculation_type)
+        if explicit_composition is not None and composition_field is not None:
+            if len(explicit_composition) != len(grounded.components):
+                raise ValueError("The explicit composition count must match the number of resolved components.")
+            condition_data = grounded.conditions.model_dump()
+            condition_data[composition_field] = explicit_composition
+            grounded = grounded.model_copy(
+                update={"conditions": ThermodynamicConditions.model_validate(condition_data)}
+            )
         return grounded.model_copy(update={"original_question": message})
 
     @staticmethod

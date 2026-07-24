@@ -202,6 +202,98 @@ def test_deepseek_chat_normalizes_tp_flash_alias_before_execution(
     assert payload["calculation"]["validation"]["material_balance"]["passed"]
 
 
+def test_backend_comparison_question_is_not_misclassified_as_calculation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        "Thermo, Phasepy, and Clapeyron use different deterministic backend implementations.",
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post(
+            "/api/chat",
+            json={"message": "thermo、Phasepy 和 Clapeyron.jl 三个计算后端有什么区别？"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["intent"] == "MODEL_SELECTION_QA"
+    assert payload["task"] is None
+    assert "缺少可识别的组分" not in payload["answer"]
+    assert request_count == 2
+
+
+def test_deepseek_chat_recovers_explicit_feed_composition_from_user_message(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = [
+        "EQUILIBRIUM_CALCULATION",
+        json.dumps(
+            {
+                "equilibrium_type": "FLASH",
+                "calculation_type": "TP_FLASH",
+                "components": [
+                    {"component_id": "methane", "name": "Methane", "cas_number": "74-82-8"},
+                    {"component_id": "ethane", "name": "Ethane", "cas_number": "74-84-0"},
+                    {"component_id": "nitrogen", "name": "Nitrogen", "cas_number": "7727-37-9"},
+                ],
+                "conditions": {
+                    "temperature_K": 110.0,
+                    "pressure_kPa": 100.0,
+                },
+                "model_name": "Peng-Robinson",
+            }
+        ),
+        json.dumps({"tool_name": "phase_equilibrium"}),
+        "The deterministic result and validation payload were received.",
+    ]
+    request_count = 0
+
+    async def respond(_: httpx.Request) -> httpx.Response:
+        nonlocal request_count
+        content = responses[request_count]
+        request_count += 1
+        return httpx.Response(200, json={"choices": [{"message": {"content": content}}]})
+
+    provider = DeepSeekProvider(
+        api_key="test-key",
+        transport=httpx.MockTransport(respond),
+    )
+    monkeypatch.setattr(api_module, "orchestrator", ConversationOrchestrator(provider))
+
+    with client() as test_client:
+        response = test_client.post(
+            "/api/chat",
+            json={
+                "message": (
+                    "使用 Peng-Robinson 计算甲烷、乙烷和氮气的 TP Flash：温度 110 K，压力 100 kPa，"
+                    "摩尔组成为 0.965、0.018、0.017。"
+                )
+            },
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task"]["conditions"]["feed_composition"] == [0.965, 0.018, 0.017]
+    assert payload["calculation"] is not None
+    assert payload["calculation"]["validation"]["material_balance"]["passed"]
+    assert request_count == 4
+
+
 def test_request_validation_and_not_found_use_unified_error_shape() -> None:
     with client() as test_client:
         invalid = test_client.post(

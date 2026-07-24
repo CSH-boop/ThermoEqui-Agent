@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import urllib.request
 from typing import Protocol
 
 import httpx
@@ -86,6 +87,11 @@ class _DeepSeekChatCompletion(BaseModel):
 
 class _ToolSelection(BaseModel):
     tool_name: str
+
+
+def _system_proxy_url() -> str | None:
+    proxies = urllib.request.getproxies()
+    return proxies.get("https") or proxies.get("http")
 
 
 def _contains_ungrounded_claim(text: str) -> bool:
@@ -294,6 +300,7 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         base_url: str = "https://api.deepseek.com",
         timeout_seconds: float = 30.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        proxy_url: str | None = None,
     ) -> None:
         if not api_key:
             raise ValueError("DeepSeek API key is required")
@@ -302,6 +309,7 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.transport = transport
+        self.proxy_url = proxy_url if proxy_url is not None else _system_proxy_url()
 
     async def _request(
         self,
@@ -324,7 +332,11 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
         headers = {"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}
-        async with httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport) as client:
+        if self.proxy_url is not None and self.transport is None:
+            client = httpx.AsyncClient(timeout=self.timeout_seconds, proxy=self.proxy_url)
+        else:
+            client = httpx.AsyncClient(timeout=self.timeout_seconds, transport=self.transport)
+        async with client:
             try:
                 response = await client.post(f"{self.base_url}/chat/completions", json=payload, headers=headers)
                 response.raise_for_status()
