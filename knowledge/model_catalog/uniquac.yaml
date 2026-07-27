@@ -1,0 +1,44 @@
+name: UNIQUAC
+aliases:
+  - uniquac
+family: activity_coefficient
+backend: contract_only
+implementation_status: contract_only
+production_ready: false
+supported_equilibrium_types:
+  - VLE
+  - LLE
+supported_calculation_types:
+  - bubble_point
+  - dew_point
+  - isobaric_vle
+  - isothermal_vle
+  - azeotrope
+  - lle
+excluded_systems:
+  - electrolyte_without_extension
+  - reactive
+  - SLE
+  - polymer
+  - hydrate
+  - petroleum_pseudocomponent
+  - VLLE
+pressure_regime:
+  - low
+  - moderate
+requires_binary_parameters: true
+parameter_requirements:
+  - Evidence-bearing UNIQUAC binary parameters
+  - Reviewed production parameter library is required before execution
+validation_requirements:
+  - composition_balance
+  - equilibrium_residual
+  - phase_stability
+scope_notes:
+  - Applicable to low- to moderate-pressure non-ideal VLE and LLE with reviewed binary parameters.
+  - Intended for systems where liquid-phase non-ideality is important.
+  - Production execution is unavailable in this release.
+optional_dependency:
+source_refs:
+  - knowledge/model_cards/uniquac.yaml
+  - thermo_engine/registry.py
