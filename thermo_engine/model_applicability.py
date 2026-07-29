@@ -3,12 +3,55 @@
 from __future__ import annotations
 
 from schemas.model_applicability import (
+    ModelAllowanceRequest,
+    ModelAllowanceResult,
     ModelApplicabilityReport,
     ModelApplicabilityRequest,
     ModelApplicabilityResult,
 )
 from schemas.model_catalog import ModelCatalogEntry
 from thermo_engine.model_catalog import load_model_catalog
+
+
+def is_model_allowed(request: ModelAllowanceRequest) -> ModelAllowanceResult:
+    entry = load_model_catalog().get(request.model_name)
+    if entry is None:
+        return ModelAllowanceResult(
+            allowed=False,
+            reason=f"Rejected: model {request.model_name!r} is not present in the model catalog.",
+        )
+
+    reasons: list[str] = []
+    available_parameters = {name.casefold() for name in request.available_parameters}
+
+    if request.calculation_type not in entry.supported_calculation_types:
+        reasons.append(
+            f"calculation_type {request.calculation_type!r} is not supported by {entry.name}"
+        )
+    if request.equilibrium_type not in entry.supported_equilibrium_types:
+        reasons.append(
+            f"equilibrium_type {request.equilibrium_type!r} is not supported by {entry.name}"
+        )
+    if entry.requires_binary_parameters and entry.name.casefold() not in available_parameters:
+        reasons.append(
+            f"{entry.name} requires reviewed binary interaction parameters, but none are available"
+        )
+
+    if entry.name in {"NRTL", "UNIQUAC"} and request.equilibrium_type == "LLE":
+        reasons.append(
+            f"{entry.name} is not currently allowed for LLE because the shared activity-coefficient backend "
+            "does not provide executable LLE support"
+        )
+    if entry.name == "Wilson" and request.equilibrium_type == "LLE":
+        reasons.append("Wilson explicitly rejects LLE in the current backend")
+
+    if reasons:
+        return ModelAllowanceResult(allowed=False, reason="Rejected: " + "; ".join(reasons) + ".")
+
+    return ModelAllowanceResult(
+        allowed=True,
+        reason=f"Allowed: {entry.name} satisfies the current model applicability rules.",
+    )
 
 
 def evaluate_model_applicability(

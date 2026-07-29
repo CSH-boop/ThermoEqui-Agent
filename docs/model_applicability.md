@@ -40,9 +40,9 @@ The following pieces are currently in place:
 | `Peng-Robinson` | `thermo` | `available` | `true` | Moderate- to high-pressure VLE and flash for hydrocarbons and reviewed light-gas systems |
 | `Phasepy/Peng-Robinson` | `phasepy` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
 | `Clapeyron/Peng-Robinson` | `clapeyron` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
-| `NRTL` | `contract_only` | `contract_only` | `false` | Catalog and contract-level applicability only; production execution is unavailable |
-| `UNIQUAC` | `contract_only` | `contract_only` | `false` | Catalog and contract-level applicability only; production execution is unavailable |
-| `Wilson` | `contract_only` | `contract_only` | `false` | Catalog and contract-level applicability only; not suitable for LLE in the current product scope |
+| `NRTL` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure non-ideal VLE and flash-style backend with limited reviewed binary parameter coverage |
+| `UNIQUAC` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure non-ideal VLE and flash-style backend with limited reviewed binary parameter coverage |
+| `Wilson` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure VLE and flash-style backend; LLE is explicitly rejected |
 
 ## Current Filtering Rules
 
@@ -65,13 +65,95 @@ The current applicability filter is intentionally minimal. It only applies the f
 The filter returns one result for every catalog entry and accumulates all applicable exclusion
 reasons. If no exclusion rule is triggered, the result is `keep` with a short positive reason.
 
+## Model Applicability Rules
+
+The repository now also provides a small single-model applicability check for answering:
+
+- whether one named model is allowed for one requested problem shape
+- why it is allowed or rejected
+
+This check uses `thermo_engine.model_applicability.is_model_allowed(...)` and currently expects:
+
+- `model_name`
+- `calculation_type`
+- `equilibrium_type`
+- `available_parameters`
+
+It returns:
+
+- `allowed: bool`
+- `reason: str`
+
+Current model-specific rules are intentionally conservative and do not change catalog execution
+status. This applicability layer only performs candidate-model screening. It does not implement new
+thermodynamic backends, does not modify `registry.py`, `service.py`, or `router.py`, and does not
+upgrade `production_ready`.
+
+### NRTL
+
+Applicable to:
+
+- Non-ideal liquid-phase VLE
+- Flash-style calculations already implemented by the shared activity-coefficient backend
+- Cases with valid binary interaction parameters
+
+Rejected when:
+
+- Required parameters are unavailable
+- The requested calculation is outside the supported calculation scope
+- `LLE` is requested
+- The requested equilibrium type is otherwise unsupported
+
+Current status:
+
+- Backend code is implemented and registered in the current code package
+- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+
+### UNIQUAC
+
+Applicable to:
+
+- Non-ideal liquid-phase VLE
+- Flash-style calculations already implemented by the shared activity-coefficient backend
+- Cases with valid binary interaction parameters
+
+Rejected when:
+
+- Required parameters are unavailable
+- The requested calculation is outside the supported task scope
+- `LLE` is requested
+- The requested equilibrium type is otherwise unsupported
+
+Current status:
+
+- Backend code is implemented and registered in the current code package
+- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+
+### Wilson
+
+Applicable to:
+
+- VLE
+- Flash-style calculations already implemented by the shared activity-coefficient backend
+
+Rejected when:
+
+- `LLE`
+- The requested equilibrium type is otherwise unsupported
+- The requested calculation is outside the supported calculation scope
+- Required binary parameters are unavailable
+
+Current status:
+
+- Backend code is implemented and registered in the current code package
+- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+
 ## Current Boundary
 
 The current boundary of this feature is intentionally narrow:
 
 - The applicability filter is **not yet connected** to `executor`, `router`, or backend resolution.
-- Catalog status should only be updated after a model is actually integrated into the main project
-  execution path.
+- This layer does not change backend execution logic even when a backend already exists in the codebase.
 - This document does not evaluate or summarize external traditional-model code quality.
 - This document does not describe unconfirmed AI model capabilities.
 - This document does not describe unconfirmed `SRK` support in the main project.
