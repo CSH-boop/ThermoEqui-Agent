@@ -62,11 +62,27 @@ def test_optional_external_backends_are_not_production_ready() -> None:
     assert catalog["Clapeyron/Peng-Robinson"].production_ready is False
 
 
+def test_activity_coefficient_backends_are_available_but_not_production_ready() -> None:
+    catalog = load_model_catalog()
+
+    for name in ("NRTL", "UNIQUAC", "Wilson"):
+        assert catalog[name].implementation_status == "available"
+        assert catalog[name].production_ready is False
+
+
 def test_ideal_raoult_does_not_claim_lle_support() -> None:
     ideal = load_model_catalog()["Ideal/Raoult"]
 
     assert "LLE" not in ideal.supported_equilibrium_types
     assert "lle" not in ideal.supported_calculation_types
+
+
+def test_activity_coefficient_catalog_entries_do_not_claim_executable_lle_support() -> None:
+    catalog = load_model_catalog()
+
+    for name in ("NRTL", "UNIQUAC", "Wilson"):
+        assert "LLE" not in catalog[name].supported_equilibrium_types
+        assert "lle" not in catalog[name].supported_calculation_types
 
 
 def test_empty_yaml_raises_value_error(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -125,6 +125,20 @@ def test_wilson_vle_is_allowed() -> None:
     assert "Allowed:" in result.reason
 
 
+def test_wilson_flash_is_allowed() -> None:
+    result = is_model_allowed(
+        ModelAllowanceRequest(
+            model_name="Wilson",
+            calculation_type="tp_flash",
+            equilibrium_type="FLASH",
+            available_parameters={"Wilson"},
+        )
+    )
+
+    assert result.allowed is True
+    assert "Allowed:" in result.reason
+
+
 def test_wilson_lle_is_rejected() -> None:
     result = is_model_allowed(
         ModelAllowanceRequest(
