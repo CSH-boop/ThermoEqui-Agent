@@ -78,7 +78,40 @@ const response = {
       solver_converged: true,
     },
     parameter_sources: [],
-    model_recommendations: [],
+    model_recommendations: [
+      {
+        model_name: "NRTL",
+        score: 72,
+        executable: false,
+        reasons: ["Phase support: not matched."],
+        exclusions: ["NRTL does not support LLE"],
+        breakdown: {
+          phase_support_score: 0,
+          system_match_score: 23,
+          condition_match_score: 15,
+          parameter_availability_score: 0,
+          evidence_quality_score: 0,
+          extrapolation_penalty: 0,
+          numerical_risk_penalty: 12,
+        },
+      },
+      {
+        model_name: "Ideal/Raoult",
+        score: 81,
+        executable: true,
+        reasons: ["Phase support: matched."],
+        exclusions: [],
+        breakdown: {
+          phase_support_score: 30,
+          system_match_score: 24,
+          condition_match_score: 15,
+          parameter_availability_score: 15,
+          evidence_quality_score: 10,
+          extrapolation_penalty: 0,
+          numerical_risk_penalty: 0,
+        },
+      },
+    ],
   },
 };
 
@@ -89,19 +122,22 @@ describe("Workbench", () => {
 
   it("loads the engineering workbench and accepts a conversation task", async () => {
     render(<Workbench />);
-    expect(screen.getByText("工程对话")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: /运行任务/i }));
+    expect(screen.getByText("宸ョ▼瀵硅瘽")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /杩愯浠诲姟/i }));
     await waitFor(() => expect(screen.getByText("Calculation complete.")).toBeInTheDocument());
     expect(screen.getByTestId("vle-chart")).toBeInTheDocument();
     expect(screen.getByText("Benzene / Toluene")).toBeInTheDocument();
-    expect(screen.getByText("1 任务理解")).toBeInTheDocument();
-    expect(screen.getByText("4 结果验证")).toBeInTheDocument();
+    expect(screen.getByText("1 浠诲姟鐞嗚В")).toBeInTheDocument();
+    expect(screen.getByText("4 缁撴灉楠岃瘉")).toBeInTheDocument();
   });
 
   it("keeps API errors in the diagnostic panel", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: { message: "Missing parameters" } }) }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({ ok: false, json: async () => ({ error: { message: "Missing parameters" } }) }),
+    );
     render(<Workbench />);
-    fireEvent.click(screen.getByRole("button", { name: /运行任务/i }));
+    fireEvent.click(screen.getByRole("button", { name: /杩愯浠诲姟/i }));
     await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Missing parameters"));
   });
 
@@ -112,16 +148,33 @@ describe("Workbench", () => {
       .mockResolvedValueOnce({ ok: true, json: async () => response.calculation });
     vi.stubGlobal("fetch", fetchMock);
     render(<Workbench />);
-    fireEvent.click(screen.getByRole("button", { name: /运行任务/i }));
+    fireEvent.click(screen.getByRole("button", { name: /杩愯浠诲姟/i }));
     await waitFor(() => expect(screen.getByTestId("vle-chart")).toBeInTheDocument());
-    fireEvent.change(screen.getByLabelText("压力 kPa"), { target: { value: "80" } });
-    fireEvent.click(screen.getByRole("button", { name: "按当前条件重新计算" }));
+    fireEvent.change(screen.getByLabelText("鍘嬪姏 kPa"), { target: { value: "80" } });
+    fireEvent.click(screen.getByRole("button", { name: "鎸夊綋鍓嶆潯浠堕噸鏂拌绠? } }));
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
     const rerunBody = JSON.parse(String(fetchMock.mock.calls[1][1]?.body));
     expect(rerunBody.conditions.pressure_kPa).toBe(80);
     fireEvent.click(screen.getByRole("button", { name: "Table" }));
     expect(screen.getByText("T / K")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "下载 JSON" })).toHaveAttribute("href", expect.stringContaining("format=json"));
-    expect(screen.getByRole("link", { name: "下载 CSV" })).toHaveAttribute("href", expect.stringContaining("format=csv"));
+    expect(screen.getByRole("link", { name: "涓嬭浇 JSON" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("format=json"),
+    );
+    expect(screen.getByRole("link", { name: "涓嬭浇 CSV" })).toHaveAttribute(
+      "href",
+      expect.stringContaining("format=csv"),
+    );
+  });
+
+  it("shows model applicability feedback in the model tab", async () => {
+    render(<Workbench />);
+    fireEvent.click(screen.getByRole("button", { name: /杩愯浠诲姟/i }));
+    await waitFor(() => expect(screen.getByText("Calculation complete.")).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "Model" }));
+    expect(screen.getByText("NRTL")).toBeInTheDocument();
+    expect(screen.getByText("NRTL does not support LLE")).toBeInTheDocument();
+    expect(screen.getByText("模型不可用")).toBeInTheDocument();
+    expect(screen.getByText("建议：选择其他支持模型或补充必要参数。")).toBeInTheDocument();
   });
 });

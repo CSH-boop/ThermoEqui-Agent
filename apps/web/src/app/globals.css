@@ -1150,6 +1150,78 @@ tbody tr:nth-child(even) {
   border-radius: 10px;
 }
 
+.model-validation-panel {
+  margin-top: 8px;
+}
+
+.model-validation-list {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+}
+
+.model-validation-card {
+  border: 1px solid var(--line);
+  padding: 10px;
+  background: #fbfcfd;
+  border-radius: 10px;
+}
+
+.model-validation-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.model-validation-topline strong {
+  font-size: 14px;
+  color: #213344;
+}
+
+.model-validation-badge {
+  text-transform: uppercase;
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  font-weight: 900;
+  padding: 4px 7px;
+  border-radius: 999px;
+}
+
+.model-validation-badge.available {
+  background: #def7ed;
+  color: #087a5b;
+}
+
+.model-validation-badge.blocked {
+  background: #fee2e2;
+  color: #a51d2b;
+}
+
+.model-validation-reasons p {
+  margin: 0 0 6px;
+  color: #6a7d8c;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.model-validation-reasons ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #586b79;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.model-validation-advice {
+  margin: 10px 0 0;
+  color: #617482;
+  font-size: 11px;
+  line-height: 1.5;
+}
+
 .cards article > span,
 .pass,
 .fail {
