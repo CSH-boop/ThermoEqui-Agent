@@ -13,6 +13,8 @@ from schemas.domain import (
     SystemProfile,
     TaskManifest,
 )
+from schemas.model_applicability import ModelAllowanceRequest
+from thermo_engine.model_applicability import is_model_allowed
 from thermo_engine.properties import resolve_component
 
 CARD_DIRECTORY = Path(__file__).resolve().parents[1] / "knowledge" / "model_cards"
@@ -75,6 +77,16 @@ def recommend_models(
         has_parameters = not card.requires_binary_parameters or card.model_name.casefold() in available
         if not has_parameters:
             reasons.append("Required binary parameters are unavailable; execution is blocked.")
+        applicability = is_model_allowed(
+            ModelAllowanceRequest(
+                model_name=card.model_name,
+                calculation_type=task.calculation_type,
+                equilibrium_type=task.equilibrium_type,
+                available_parameters=available_parameter_models or set(),
+            )
+        )
+        if not applicability.allowed:
+            exclusions.append(applicability.reason)
         phase_score = 30.0 if phase_supported else 0.0
         if profile.pressure_regime == "high":
             system_score = 25.0 if card.family == "cubic_eos" else 2.0
@@ -96,7 +108,7 @@ def recommend_models(
             extrapolation_penalty=extrapolation_penalty,
             numerical_risk_penalty=numerical_penalty,
         )
-        executable = not exclusions and has_parameters and card.implementation_status == "available"
+        executable = not exclusions and applicability.allowed
         reasons.extend(
             [
                 f"Phase support: {'matched' if phase_supported else 'not matched'}.",

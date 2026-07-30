@@ -14,6 +14,31 @@ Its current goals are:
 This layer does **not** currently perform automatic routing by itself. Final model routing remains
 separate from this metadata and filtering layer.
 
+## Current Selection Flow
+
+The current project flow is:
+
+- `knowledge/model_cards/*.yaml`
+- `agent/router.py`
+- `thermo_engine.model_applicability`
+- `agent/executor.py`
+- `thermo_engine.service`
+
+In practice:
+
+1. `agent/router.py` loads `model_cards` and generates candidate recommendations.
+2. During candidate recommendation, the router now calls the model applicability layer for
+   per-model hard-constraint checks.
+3. Applicability may mark a candidate as non-executable and add explicit exclusion reasons.
+4. The router still keeps the recommendation object and original scoring structure.
+5. `agent/executor.py` remains responsible for actual execution through `thermo_engine.service`.
+
+This means:
+
+- Applicability is responsible for model-scope checks, execution constraints, and exclusion reasons.
+- The router is responsible for candidate generation and final recommendation ordering.
+- The executor and `thermo_engine` remain responsible for backend resolution and calculation.
+
 ## Implemented
 
 The following pieces are currently in place:

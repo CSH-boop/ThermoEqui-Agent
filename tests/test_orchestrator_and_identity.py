@@ -32,6 +32,17 @@ def test_electrolyte_identity_rejects_non_electrolyte_gas() -> None:
     component = ComponentIdentity(component_id="nitrogen", name="Nitrogen", cas_number="7727-37-9")
     assert not is_electrolyte_identity(component)
 
+
+@pytest.mark.asyncio
+async def test_formulate_task_extracts_binary_components_from_chinese_system_phrase() -> None:
+    provider = DeterministicProvider()
+
+    task = await provider.formulate_task("乙醇-水体系进行VLE计算")
+
+    assert task is not None
+    assert [component.component_id for component in task.components] == ["ethanol", "water"]
+
+
 @pytest.mark.asyncio
 async def test_conversation_orchestrator_returns_warning_for_unsupported_electrolyte_task() -> None:
     provider = DeterministicProvider()

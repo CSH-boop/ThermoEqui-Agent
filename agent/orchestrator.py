@@ -170,7 +170,29 @@ def _component_role_is_ambiguous(message: str, start: int, end: int) -> bool:
     return prefix_is_ambiguous is not None or suffix_is_ambiguous is not None
 
 
+def _is_component_list_separator(value: str) -> bool:
+    return re.fullmatch(r"\s*(?:-|/|\+|,|，|、|和|与)\s*", value.casefold()) is not None
+
+
+def _has_scoped_component_list_role_evidence(message: str, start: int, end: int) -> bool:
+    prefix = message[max(0, start - 80) : start].casefold()
+    suffix = message[end : min(len(message), end + 48)].casefold()
+    scoped_prefix = re.search(
+        r"(?:(?:calculate|compute|simulate|evaluate)\s+(?:(?:a|the)\s+)?"
+        r"(?:(?:tp\s+)?flash|vle|bubble\s+point|dew\s+point|azeotrope|equilibrium)?\s*"
+        r"(?:for|of)?|(?:use|using)\s+[a-z0-9-]+\s+for|"
+        r"计算|模拟|进行)\s*$",
+        prefix,
+    )
+    scoped_suffix = re.match(
+        r"\s*(?:体系|物系|混合物|系统)(?:\s*(?:进行|做|的|在|下))?",
+        suffix,
+    )
+    return scoped_prefix is not None or scoped_suffix is not None
+
+
 def _requested_components(message: str) -> list[ComponentIdentity]:
+    mentioned_matches: list[tuple[int, int, ComponentIdentity, bool]] = []
     by_cas: dict[str, tuple[int, ComponentIdentity]] = {}
     for component in _mentioned_components(message):
         if component.cas_number is None:
@@ -184,9 +206,28 @@ def _requested_components(message: str) -> list[ComponentIdentity]:
             position, end = min(spans)
             if _component_role_is_ambiguous(message, position, end):
                 raise LLMProviderOutputError("The component role is ambiguous and requires clarification.")
-            if not has_chemical_role_evidence(message, position, end):
-                continue
-            by_cas[component.cas_number] = (position, component)
+            grounded = has_chemical_role_evidence(message, position, end)
+            mentioned_matches.append((position, end, component, grounded))
+            if grounded:
+                by_cas[component.cas_number] = (position, component)
+
+    group_start = 0
+    for index in range(len(mentioned_matches)):
+        group_ends = index == len(mentioned_matches) - 1 or not _is_component_list_separator(
+            message[mentioned_matches[index][1] : mentioned_matches[index + 1][0]]
+        )
+        if not group_ends:
+            continue
+        group = mentioned_matches[group_start : index + 1]
+        if len(group) > 1 and (
+            any(grounded for _, _, _, grounded in group)
+            or _has_scoped_component_list_role_evidence(message, group[0][0], group[-1][1])
+        ):
+            for position, _, component, _ in group:
+                assert component.cas_number is not None
+                by_cas.setdefault(component.cas_number, (position, component))
+        group_start = index + 1
+
     for position, component in resolve_literal_components(message):
         literal = component.aliases[0] if component.aliases else component.name
         if _component_role_is_ambiguous(message, position, position + len(literal)):
