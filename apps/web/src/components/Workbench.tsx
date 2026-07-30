@@ -26,7 +26,15 @@ function agentStatus(steps: AgentStep[], loading: boolean): string {
   if (steps.some((step) => step.status === "failed" || step.status === "blocked")) return "异常";
   if (loading) return "运行中";
   if (steps.length > 0) return "已完成";
-  return "待机";
+  return "待命";
+}
+
+function applicabilityAdvice(executable: boolean): string {
+  return executable ? "模型可用，可继续参与当前推荐流程。" : "选择其他支持模型或补充必要参数。";
+}
+
+function modelStatusLabel(executable: boolean): string {
+  return executable ? "模型可用" : "模型不可用";
 }
 
 export function Workbench() {
@@ -265,9 +273,9 @@ export function Workbench() {
             <div className="result-body">
               {!calculation && (
                 <div className="empty result-empty">
-                  <span>◎</span>
+                  <span>●</span>
                   <h3>等待确定性计算结果</h3>
-                  <p>上半屏聚焦任务输入、Agent 执行和验证摘要，详细图表与数据在其后连续展开。</p>
+                  <p>上方区域聚焦任务输入、Agent 执行和验证摘要，详细图表与数据将在这里展开。</p>
                 </div>
               )}
               {calculation && activeTab === "table" && (
@@ -313,6 +321,46 @@ export function Workbench() {
                         <h3>{item.model_name}</h3>
                         <strong>{item.score.toFixed(1)} 分</strong>
                         <p>{item.reasons.join(" ")}</p>
+                      </article>
+                    ))}
+                  </div>
+                </section>
+              )}
+              {calculation && activeTab === "model" && calculation.model_recommendations.length > 0 && (
+                <section className="result-panel model-validation-panel">
+                  <div className="panel-heading">
+                    <h3>模型适用性检查</h3>
+                  </div>
+                  <div className="model-validation-list">
+                    {calculation.model_recommendations.map((item) => (
+                      <article key={`validation-${item.model_name}`} className="model-validation-card">
+                        <div className="model-validation-topline">
+                          <strong>{item.model_name}</strong>
+                          <span className={`model-validation-badge ${item.executable ? "available" : "blocked"}`}>
+                            {modelStatusLabel(item.executable)}
+                          </span>
+                        </div>
+                        {item.reasons.length > 0 && (
+                          <div className="model-validation-reasons">
+                            <p>理由</p>
+                            <ul>
+                              {item.reasons.map((reason, index) => (
+                                <li key={`${item.model_name}-reason-${index}`}>{reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {item.exclusions.length > 0 && (
+                          <div className="model-validation-reasons">
+                            <p>排除原因</p>
+                            <ul>
+                              {item.exclusions.map((reason, index) => (
+                                <li key={`${item.model_name}-exclusion-${index}`}>{reason}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        <p className="model-validation-advice">建议：{applicabilityAdvice(item.executable)}</p>
                       </article>
                     ))}
                   </div>
@@ -377,7 +425,7 @@ export function Workbench() {
                         <div>
                           <strong>{run.result.run_id.slice(0, 8)}</strong>
                           <p>
-                            {run.result.model_name} · {run.result.pressure_kPa?.toFixed(3) ?? "--"} kPa
+                            {run.result.model_name} 路 {run.result.pressure_kPa?.toFixed(3) ?? "--"} kPa
                           </p>
                         </div>
                         <span className={run.validation.overall_status}>{run.validation.overall_status}</span>
@@ -436,7 +484,11 @@ export function Workbench() {
             <div className="parameter-grid">
               <label className="field field-model">
                 模型
-                <select aria-label="热力学模型" value={task?.model_name ?? "Ideal/Raoult"} onChange={(event) => updateModel(event.target.value)}>
+                <select
+                  aria-label="热力学模型"
+                  value={task?.model_name ?? "Ideal/Raoult"}
+                  onChange={(event) => updateModel(event.target.value)}
+                >
                   <option>Ideal/Raoult</option>
                   <option>Wilson</option>
                   <option>NRTL</option>
