@@ -620,6 +620,13 @@ class ConversationOrchestrator:
         ):
             return deterministic_intent
         if (
+            deterministic_intent == Intent.EQUILIBRIUM_CALCULATION
+            and provider_intent != Intent.EQUILIBRIUM_CALCULATION
+            and _mentioned_components(message)
+        ):
+            return deterministic_intent
+
+        if (
             deterministic_intent == Intent.MODEL_SELECTION_QA
             and provider_intent == Intent.EQUILIBRIUM_CALCULATION
             and _is_model_comparison_question(message)
