@@ -307,12 +307,14 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         return [EvidenceStatement(category="Inference", text=value)]
 
     async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
-        """Override: more permissive version that allows grounded knowledge discussion."""
+        """LLM 组织非计算类回答；含未经证实的数值或引用时扣留，数值一律来自 thermo_engine。"""
         value = await self._request(
             "Answer concise thermodynamics knowledge questions. "
             "Do not cite external sources. Keep answers informative.",
             message,
         )
+        if _contains_ungrounded_claim(value):
+            return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
         return [EvidenceStatement(category="Knowledge", text=value)]
 
     def __init__(

@@ -570,8 +570,6 @@ class ConversationOrchestrator:
         deterministic_intent = await DeterministicProvider().classify_intent(message)
         if deterministic_intent == Intent.UNSUPPORTED_TASK:
             return deterministic_intent
-        if deterministic_intent == Intent.EQUILIBRIUM_CALCULATION:
-            return deterministic_intent
         try:
             provider_intent = await self.provider.classify_intent(message)
         except LLMProviderOutputError:
