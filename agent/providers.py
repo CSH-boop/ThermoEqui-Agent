@@ -304,12 +304,12 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         )
         return [EvidenceStatement(category="Inference", text=value)]
 
-        return [EvidenceStatement(category="Inference", text=value)]
-
     async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
-        """Override: more permissive version that allows grounded knowledge discussion."""
+        """Override: answer both thermodynamics knowledge and general questions."""
         value = await self._request(
-            "Answer concise thermodynamics knowledge questions. "
+            "Answer the user's question concisely and helpfully. "
+            "If the question is about thermodynamics or phase equilibrium, answer with domain expertise. "
+            "If the question is general, answer naturally. "
             "Do not cite external sources. Keep answers informative.",
             message,
         )

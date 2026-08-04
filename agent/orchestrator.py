@@ -582,6 +582,15 @@ class ConversationOrchestrator:
             and _is_model_comparison_question(message)
         ):
             return deterministic_intent
+        if provider_intent == Intent.UNSUPPORTED_TASK and deterministic_intent in {
+            Intent.CONCEPT_QA,
+            Intent.MODEL_SELECTION_QA,
+            Intent.PARAMETER_QUERY,
+            Intent.DATA_QUERY,
+            Intent.RESULT_INTERPRETATION,
+            Intent.PROCESS_RECOMMENDATION,
+        }:
+            return deterministic_intent
         return provider_intent
 
     @classmethod
