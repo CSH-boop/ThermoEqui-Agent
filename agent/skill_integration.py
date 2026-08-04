@@ -2,10 +2,12 @@
 Provides lazy initialization and a clean interface for the orchestrator.
 """
 from __future__ import annotations
+
 import logging
 import threading
-from typing import Optional
-from schemas.domain import Intent, EvidenceStatement
+
+from schemas.domain import EvidenceStatement, Intent
+
 logger = logging.getLogger(__name__)
 
 # Lazy init state
@@ -123,7 +125,6 @@ def answer_with_skills(question: str, intent: Intent) -> list[EvidenceStatement]
         return []
 
     registry = get_skill_registry()
-    intent_str = intent.value if isinstance(intent, Intent) else str(intent)
     intent_to_skill = {
         Intent.CONCEPT_QA: ("knowledge_qa", "知识问答"),
         Intent.MODEL_SELECTION_QA: ("model_recommendation", "模型推荐"),
