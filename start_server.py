@@ -8,8 +8,8 @@ os.environ["DEEPSEEK_BASE_URL"] = "https://api.deepseek.com"
 
 proc = subprocess.Popen(
     [sys.executable, "-m", "uvicorn", "apps.api.main:app",
-     "--host", "0.0.0.0", "--port", "8000"],
-    cwd=r"D:\Codex\ThermoEqui-Agent-main",
+     "--host", "127.0.0.1", "--port", "8000"],
+    cwd=r"../ThermoEqui-Agent-SMH",
 )
 time.sleep(5)
 print(f"SERVER_PID:{proc.pid}", flush=True)
