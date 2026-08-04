@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from uuid import uuid4
 
+from agent.providers import LLMProvider, LLMProviderError, LLMProviderOutputError
 from agent.graph_workflow import BoundedAgentGraph
 from agent.providers import LLMProvider, LLMProviderOutputError
 from agent.tools import DEFAULT_TOOL_REGISTRY, EngineeringToolRegistry
@@ -500,8 +501,14 @@ class ConversationOrchestrator:
             Intent.RESULT_INTERPRETATION,
         }:
             statements = answer_with_skills(message, intent)
-            if not statements:
+            try:
                 statements = await self.provider.answer_with_evidence(message)
+            except (LLMProviderError, LLMProviderOutputError):
+                statements = []
+            if not statements or statements[0].category == "Warning":
+                skill_statements = answer_with_skills(message, intent)
+                if skill_statements:
+                    statements = skill_statements
             return ChatResponse(
                 conversation_id=conversation_id,
                 intent=intent,
