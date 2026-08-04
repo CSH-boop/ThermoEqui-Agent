@@ -14,6 +14,7 @@ from agent.tools import DEFAULT_TOOL_REGISTRY, EngineeringToolRegistry
 from agent.skill_integration import answer_with_skills
 from schemas.domain import (
     AgentStep,
+    CalculationEnvelope,
     ChatResponse,
     ComponentIdentity,
     EvidenceStatement,
@@ -447,7 +448,38 @@ class DeterministicProvider:
             return "azeotrope"
         return "isobaric_vle"
 
+def _build_calculation_summary(
+    envelope: CalculationEnvelope,
+    components: list[ComponentIdentity],
+) -> str:
+    """从计算结果构造可读摘要，替代硬编码的"计算完成"。"""
+    result = envelope.result
+    comps = " / ".join(c.name for c in components)
+    parts: list[str] = [f"模型：{result.model_name}"]
 
+    if result.temperature_K is not None:
+        parts.append(f"T={result.temperature_K:.2f} K")
+    if result.pressure_kPa is not None:
+        parts.append(f"P={result.pressure_kPa:.4f} kPa")
+
+    if result.calculation_type == "tp_flash" and result.phases:
+        for p in result.phases:
+            if p.fraction < 1e-10:
+                continue
+            c_str = ", ".join(f"{x:.4f}" for x in p.composition)
+            parts.append(f"{p.phase}相({p.fraction*100:.1f}%)：({c_str})")
+        if result.vapor_fraction is not None:
+            parts.append(f"汽化分率 β={result.vapor_fraction:.4f}")
+    elif result.points:
+        parts.append(f"数据点：{len(result.points)} 个")
+
+    parts.append(f"验证：{envelope.validation.overall_status}")
+
+    if result.warnings:
+        first = result.warnings[0]
+        parts.append(f"⚠ {first[:80]}{'…' if len(first) > 80 else ''}")
+
+    return "计算完成。\n" + "\n".join(parts)
 class ConversationOrchestrator:
     def __init__(
         self,
@@ -545,7 +577,7 @@ class ConversationOrchestrator:
             return ChatResponse(
                 conversation_id=conversation_id,
                 intent=intent,
-                answer="计算完成。" if validation.overall_status != "failed" else "计算未通过物理验证。",
+                answer=_build_calculation_summary(envelope, task.components),
                 statements=statements,
                 execution_steps=execution_steps,
                 task=task,
