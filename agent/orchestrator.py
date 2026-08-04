@@ -375,7 +375,7 @@ class DeterministicProvider:
             original_question=message,
         )
 
-    async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
+    async def answer_with_evidence(self, message: str, strict: bool = False) -> list[EvidenceStatement]:
         if "nrtl" in message.casefold() and ("peng" in message.casefold() or "pr" in message.casefold()):
             text = (
                 "NRTL 是液相活度系数模型，适合低到中压下的非理想液相 VLE/LLE，通常需要有来源的二元交互参数；"
@@ -500,9 +500,9 @@ class ConversationOrchestrator:
             Intent.PROCESS_RECOMMENDATION,
             Intent.RESULT_INTERPRETATION,
         }:
-            statements = answer_with_skills(message, intent)
+            strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}   # 新增
             try:
-                statements = await self.provider.answer_with_evidence(message)
+                statements = await self.provider.answer_with_evidence(message, strict=strict)
             except (LLMProviderError, LLMProviderOutputError):
                 statements = []
             if not statements or statements[0].category == "Warning":
@@ -580,6 +580,12 @@ class ConversationOrchestrator:
         try:
             provider_intent = await self.provider.classify_intent(message)
         except LLMProviderOutputError:
+            return deterministic_intent
+        if (
+            provider_intent == Intent.EQUILIBRIUM_CALCULATION
+            and deterministic_intent != Intent.EQUILIBRIUM_CALCULATION
+            and not _mentioned_components(message)
+        ):
             return deterministic_intent
         if (
             deterministic_intent == Intent.MODEL_SELECTION_QA
