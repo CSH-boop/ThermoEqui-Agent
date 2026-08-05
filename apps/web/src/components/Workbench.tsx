@@ -177,30 +177,6 @@ export function Workbench() {
       </header>
 
       <section className="top-workspace">
-        <aside className="sidebar">
-          <div className="sidebar-section-title">
-            <p className="eyebrow">AI Chemistry Tasks</p>
-            <h2>任务模板</h2>
-          </div>
-          <div className="task-template-grid">
-            {examples.map((example) => (
-              <button key={example.code} className="task-template-card" onClick={() => setInput(example.prompt)}>
-                <div className="task-template-topline">
-                  <span>{example.code}</span>
-                  <small>{example.tag}</small>
-                </div>
-                <strong>{example.title}</strong>
-                <p>{example.prompt}</p>
-              </button>
-            ))}
-          </div>
-          <div className="scope-card">
-            <p className="eyebrow">当前边界</p>
-            <strong>非电解质分子体系</strong>
-            <small>VLE / Flash / 泡露点 / 共沸搜索</small>
-          </div>
-        </aside>
-
         <div className="center-column">
           <section className="conversation">
             <div className="section-heading">

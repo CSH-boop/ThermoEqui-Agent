@@ -49,8 +49,8 @@ a {
 
 .top-workspace {
   display: grid;
-  grid-template-columns: 232px minmax(0, 2fr) minmax(300px, 332px);
-  gap: 8px;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 10px;
   background: transparent;
   align-items: start;
   padding: 0 8px 8px;
@@ -60,7 +60,7 @@ a {
 .center-column {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
   align-self: start;
   min-width: 0;
   background: transparent;
@@ -270,6 +270,7 @@ a {
   padding: 12px 14px 10px;
   align-self: start;
   width: 100%;
+  min-width: 0;
   border-radius: 18px;
   overflow: hidden;
   border: 1px solid #dbe4ea;
@@ -289,6 +290,8 @@ a {
   align-self: stretch;
   min-height: calc(100vh - 75px);
   width: 100%;
+  min-width: 0;
+  max-width: 360px;
   border-radius: 18px;
   overflow: hidden;
 }
@@ -310,13 +313,13 @@ a {
 .section-heading h2,
 .results-header h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 19px;
 }
 
 .section-heading > span,
 .results-header > span {
   color: #718392;
-  font-size: 10px;
+  font-size: 11px;
   background: #edf2f5;
   padding: 6px 9px;
   border-radius: 2px;
@@ -342,7 +345,7 @@ a {
 
 .messages label {
   display: block;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 800;
   letter-spacing: 0.13em;
   color: #8294a3;
@@ -354,9 +357,9 @@ a {
   margin: 0;
   background: #eef3f5;
   border-radius: 2px;
-  padding: 7px 9px;
+  padding: 8px 10px;
   line-height: 1.45;
-  font-size: 14px;
+  font-size: 15px;
   text-align: left;
 }
 
@@ -366,12 +369,11 @@ a {
 }
 
 .composer {
-  display: grid;
-  grid-template-columns: 1fr auto;
+  display: flex;
+  align-items: stretch;
   border: 1px solid #bdcbd5;
   background: #f8fafb;
   width: 100%;
-  max-width: 1080px;
   align-self: flex-start;
 }
 
@@ -384,6 +386,8 @@ a {
 }
 
 .composer textarea {
+  flex: 1 1 auto;
+  min-width: 0;
   min-height: 44px;
   max-height: 160px;
   height: 44px;
@@ -391,6 +395,7 @@ a {
   resize: none;
   padding: 10px 10px;
   line-height: 1.45;
+  font-size: 15px;
   background: transparent;
   outline: none;
   overflow-y: hidden;
@@ -404,6 +409,11 @@ a {
   font-weight: 700;
   padding: 0 18px;
   cursor: pointer;
+}
+
+.composer button {
+  flex: 0 0 140px;
+  width: 140px;
 }
 
 .composer button:disabled,
@@ -528,7 +538,7 @@ a {
 
 .runtime-panel-header h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .runtime-flow {
@@ -580,7 +590,7 @@ a {
 }
 
 .runtime-card strong {
-  font-size: 12px;
+  font-size: 14px;
   color: #203243;
   flex: 1;
   line-height: 1.3;
@@ -623,7 +633,7 @@ a {
 .runtime-card-summary {
   margin: 0;
   color: #677b89;
-  font-size: 11px;
+  font-size: 12px;
   line-height: 1.4;
   overflow-wrap: anywhere;
   word-break: break-word;
@@ -981,7 +991,7 @@ a {
 
 .scientific-validation-header h3 {
   margin: 0;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .scientific-validation-badge {
@@ -1032,14 +1042,14 @@ a {
 .scientific-validation-grid strong {
   display: block;
   color: #213547;
-  font-size: 12px;
+  font-size: 13px;
   margin-bottom: 3px;
 }
 
 .scientific-validation-grid p {
   margin: 0;
   color: #607382;
-  font-size: 9px;
+  font-size: 10px;
   line-height: 1.3;
 }
 
@@ -1058,7 +1068,7 @@ a {
   background: transparent;
   padding: 15px 16px 12px;
   color: #667987;
-  font-size: 14px;
+  font-size: 15px;
   white-space: nowrap;
   cursor: pointer;
 }
@@ -1098,7 +1108,7 @@ a {
 
 .panel-heading h3 {
   margin: 0;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .panel-heading > span {
@@ -1132,12 +1142,12 @@ a {
 
 .empty h3 {
   margin: 4px 0;
-  font-size: 15px;
+  font-size: 17px;
   color: #506473;
 }
 
 .empty p {
-  font-size: 12px;
+  font-size: 13px;
   max-width: 520px;
 }
 
@@ -1421,7 +1431,7 @@ tbody tr:nth-child(even) {
 }
 
 .chart-shell {
-  padding: 0 6px 6px;
+  padding: 0 10px 10px;
 }
 
 .results-actions {
@@ -1444,20 +1454,11 @@ tbody tr:nth-child(even) {
 
 @media (max-width: 1100px) {
   .top-workspace {
-    grid-template-columns: 220px 1fr;
-  }
-
-  .sidebar {
-    grid-row: auto;
-  }
-
-  .center-column,
-  .task-panel {
-    grid-column: 2;
+    grid-template-columns: minmax(0, 1fr) 320px;
   }
 
   .task-panel {
-    max-width: none;
+    max-width: 320px;
   }
 
   .task-panel,
@@ -1541,8 +1542,12 @@ tbody tr:nth-child(even) {
     overflow: visible;
   }
 
+  .task-panel {
+    max-width: none;
+  }
+
   .composer {
-    grid-template-columns: 1fr;
+    flex-direction: column;
     max-width: none;
   }
 
