@@ -1,6 +1,10 @@
 "use client";
 
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import rehypeKatex from "rehype-katex";
+import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import { exportUrl, rerunTask, sendChat } from "@/lib/api";
 import type { AgentStep, CalculationEnvelope, ChatResponse, TaskManifest } from "@/lib/types";
 import { AgentRuntime } from "./AgentRuntime";
@@ -189,15 +193,27 @@ export function Workbench() {
             <div className="conversation-body">
               <div className="messages" aria-live="polite">
                 {messages.map((message, index) => (
-                  <article className={message.role} key={`${message.role}-${index}`}>
-                    <label>{message.role === "agent" ? "AGENT" : "YOU"}</label>
-                    <p>{message.text}</p>
+                  <article className={`message-row ${message.role}`} key={`${message.role}-${index}`}>
+                    <div className="message-bubble">
+                      <label>{message.role === "agent" ? "AGENT" : "YOU"}</label>
+                      <div className="message-markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                          {message.text}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
                   </article>
                 ))}
                 {loading && (
-                  <article className="agent">
-                    <label>ENGINE</label>
-                    <p>正在理解任务、调度模型、调用热力学计算并执行验证...</p>
+                  <article className="message-row agent">
+                    <div className="message-bubble">
+                      <label>ENGINE</label>
+                      <div className="message-markdown">
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex]}>
+                          {"正在理解任务、调度模型、调用热力学计算并执行验证..."}
+                        </ReactMarkdown>
+                      </div>
+                    </div>
                   </article>
                 )}
               </div>
