@@ -25,7 +25,7 @@ class LLMProvider(Protocol):
         available_tools: list[dict[str, str]],
     ) -> str: ...
 
-    async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]: ...
+    async def answer_with_evidence(self, message: str, strict: bool = False) -> list[EvidenceStatement]: ...
 
     async def interpret_result(self, result: dict[str, object]) -> list[EvidenceStatement]: ...
 
@@ -235,16 +235,20 @@ class ConstrainedLLMProvider:
                 )
         raise LLMProviderOutputError("External provider returned an invalid task manifest.")
 
-    async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
+    async def answer_with_evidence(self, message: str, strict: bool = False) -> list[EvidenceStatement]:
         value = await self._request(
             "Answer concise thermodynamics knowledge questions without fabricating numerical data or citations. "
             "Do not cite any source. Prefix every paragraph with Knowledge:, Inference:, or Warning:.",
             message,
         )
+        if strict and _contains_ungrounded_claim(value):
+            return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
         # Only check for calculation questions, not concept Q&A
         if _is_thermo_question(message) and _is_calculation_question(message):
             if _contains_ungrounded_claim(value, check_numbers=True):
                 return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
+        if _contains_ungrounded_claim(value):
+            value += "\n\n（以上涉及数值未经确定性引擎验证，请以计算结果为准。）"
         return [EvidenceStatement(category="Knowledge", text=value)]
 
     async def select_tool(
@@ -357,7 +361,7 @@ class DeepSeekProvider(ConstrainedLLMProvider):
         )
         return [EvidenceStatement(category="Inference", text=value)]
 
-    async def answer_with_evidence(self, message: str) -> list[EvidenceStatement]:
+    async def answer_with_evidence(self, message: str, strict: bool = False) -> list[EvidenceStatement]:
         """Override: answer both thermodynamics knowledge and general questions."""
         value = await self._request(
             "Answer the user's question concisely and helpfully. "
@@ -366,10 +370,14 @@ class DeepSeekProvider(ConstrainedLLMProvider):
             "Do not cite external sources. Keep answers informative.",
             message,
         )
+        if strict and _contains_ungrounded_claim(value):
+            return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
         if _is_thermo_question(message):
             check_numbers = _is_calculation_question(message)
             if _contains_ungrounded_claim(value, check_numbers=check_numbers):
                 return [EvidenceStatement(category="Warning", text=_WITHHELD_TEXT)]
+        if _contains_ungrounded_claim(value):
+            value += "\n\n（以上涉及数值未经确定性引擎验证，请以计算结果为准。）"
         return [EvidenceStatement(category="Knowledge", text=value)]
 
     def __init__(
