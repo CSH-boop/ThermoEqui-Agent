@@ -143,7 +143,21 @@ def _is_parameter_query_question(message: str) -> bool:
     return True
 
 
+_CONCEPT_QA_KEYWORDS = re.compile(
+    r"(分析|解释|原理|概念|意义|为什么|是什么|介绍|阐述|理解|讲解|说明|讨论|"
+    r"对比|比较|区别|联系|特点|特征|应用|用途|案例|例子|请问|如何|怎样|怎么|"
+    r"判断|判断.*是否|是否会|if.*occurs|how.*to.*judge|why|what|concept|explain|describe)"
+)
+
+
+def _is_concept_question(message: str) -> bool:
+    """Check if a message is a concept Q&A rather than a calculation request."""
+    return _CONCEPT_QA_KEYWORDS.search(message) is not None
+
+
 def _mentioned_components(message: str) -> list[ComponentIdentity]:
+    if _is_concept_question(message):
+        return []
     lower = message.casefold()
     candidates: list[tuple[int, int, int, ComponentIdentity]] = []
     for component_id, name, cas_number, aliases in COMPONENT_PATTERNS:
