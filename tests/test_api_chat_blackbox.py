@@ -97,6 +97,20 @@ def test_chat_model_comparison_question_returns_qa_intent() -> None:
     assert payload["statements"]
 
 
+def test_local_ipv4_frontend_origin_is_allowed() -> None:
+    with client() as test_client:
+        response = test_client.options(
+            "/api/chat",
+            headers={
+                "Origin": "http://127.0.0.1:3000",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "http://127.0.0.1:3000"
+
+
 def test_chat_incomplete_task_returns_warning_without_execution() -> None:
     """测试目的：验证条件不足时，接口返回缺失提示并且不执行计算。"""
     request = {
