@@ -336,14 +336,18 @@ _CALCULATION_REQUEST_VERBS = (
     "推算",
 )
 _NON_REQUEST_CALCULATION_PREFIXES = (
-    "经计算", "通过计算", "由计算",
+    "模型计算", "方程计算", "经计算", "通过计算", "由计算", "用计算",
     "计算得到", "计算得出", "计算结果", "计算显示", "计算表明",
     "经过计算", "理论计算", "模拟计算",
 )
 
 
 def _is_active_calculation_request(message: str) -> bool:
-    """Detect active calculation requests instead of passive calculation descriptions."""
+    """Detect active calculation requests vs passive descriptions of calculations.
+
+    Active: "计算苯-甲苯气液平衡", "帮我求算", "calc the VLE"
+    Passive: "模型计算得到", "经计算表明", "计算结果显示"
+    """
     lower = message.casefold()
     if any(prefix.casefold() in lower for prefix in _NON_REQUEST_CALCULATION_PREFIXES):
         return False
@@ -424,7 +428,6 @@ class DeterministicProvider:
         if _is_active_calculation_request(message):
             return Intent.EQUILIBRIUM_CALCULATION
         return Intent.CONCEPT_QA
-
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         lower = message.casefold()
         component_list = _requested_components(message)
