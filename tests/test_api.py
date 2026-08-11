@@ -104,6 +104,35 @@ def test_chat_persists_real_run_and_exports_json_and_csv() -> None:
         assert task_row.conversation_id == payload["conversation_id"]
 
 
+def test_run_can_be_exported_as_a_dwsim_flowsheet(monkeypatch: pytest.MonkeyPatch) -> None:
+    def write_dwsim_file(run: object, destination: Path) -> Path:
+        destination.write_bytes(b"dwsim-flowsheet")
+        return destination
+
+    monkeypatch.setattr(api_module, "export_dwsim_flowsheet", write_dwsim_file)
+    with client() as test_client:
+        response = test_client.post(
+            "/api/calculations/isobaric-vle",
+            json={
+                "equilibrium_type": "VLE",
+                "calculation_type": "isobaric_vle",
+                "components": [
+                    {"component_id": "benzene", "name": "Benzene"},
+                    {"component_id": "toluene", "name": "Toluene"},
+                ],
+                "conditions": {"pressure_kPa": 101.325},
+                "model_name": "Ideal/Raoult",
+                "points": 3,
+            },
+        )
+        assert response.status_code == 200
+        run_id = response.json()["result"]["run_id"]
+        exported = test_client.get(f"/api/runs/{run_id}/export?format=dwsim")
+    assert exported.status_code == 200
+    assert exported.content == b"dwsim-flowsheet"
+    assert exported.headers["content-disposition"].endswith(f'filename="{run_id}.dwxmz"')
+
+
 def test_direct_calculation_persists_its_task_manifest() -> None:
     task = {
         "equilibrium_type": "VLE",

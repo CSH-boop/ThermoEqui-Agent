@@ -459,9 +459,9 @@ class DeterministicProvider:
         if not component_list:
             return None
         calculation_type = self._calculation_type(lower)
-        equilibrium_type = (
-            "FLASH" if calculation_type in {"tp_flash", "phase_stability"} else "LLE" if calculation_type == "lle" else "VLE"
-        )
+        equilibrium_type = "FLASH" if calculation_type in {"tp_flash", "phase_stability"} else "LLE"
+        if calculation_type not in {"tp_flash", "phase_stability", "lle"}:
+            equilibrium_type = "VLE"
         assumptions = [pressure_assumption] if pressure_assumption else []
         conditions = ThermodynamicConditions(temperature_K=temperature, pressure_kPa=pressure)
         return TaskManifest(
@@ -559,7 +559,7 @@ def _build_calculation_summary(
 ) -> str:
     """从计算结果构造可读摘要，替代硬编码的"计算完成"。"""
     result = envelope.result
-    comps = " / ".join(c.name for c in components)
+    del components
     parts: list[str] = [f"模型：{result.model_name}"]
 
 
@@ -638,9 +638,11 @@ class ConversationOrchestrator:
             Intent.PROCESS_RECOMMENDATION,
             Intent.RESULT_INTERPRETATION,
         }:
-            strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}   # 新增
+            strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}
             try:
                 statements = await self.provider.answer_with_evidence(message, strict=strict)
+            except AttributeError:
+                statements = await DeterministicProvider().answer_with_evidence(message, strict=strict)
             except (LLMProviderError, LLMProviderOutputError):
                 statements = []
             if not statements or statements[0].category == "Warning":
@@ -678,7 +680,6 @@ class ConversationOrchestrator:
             )
         try:
             envelope, statements, execution_steps = await self.graph.run(message, task)
-            validation = envelope.validation
             state.run_ids.append(envelope.result.run_id)
             return ChatResponse(
                 conversation_id=conversation_id,
