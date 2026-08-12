@@ -1,6 +1,6 @@
 # ThermoEqui-Agent delivery plan
 
-Last updated: 2026-07-20
+Last updated: 2026-08-11
 
 ## Architecture decisions
 
@@ -19,7 +19,11 @@ Last updated: 2026-07-20
 - [x] Phase 1: schemas, pure-component data, ideal VLE/Flash adapter, validation, CLI, tests.
 - [x] Phase 2: deterministic agent, model router, parameter repository, database, API, evals.
 - [x] Phase 3: workbench UI, chart/table, editable conditions, history, JSON/CSV export.
-- [ ] Phase 4: parameter regression, production NRTL/UNIQUAC LLE, multi-model comparison,
+- [~] Phase 4 (model breadth first): UNIFAC/RK pilots and backend multi-model
+  comparison are implemented; frontend adoption, parameter regression, production
+  NRTL/UNIQUAC LLE, and simulator integrations remain.
+- [ ] Phase 4 remainder: parameter regression, production NRTL/UNIQUAC LLE, frontend
+  multi-model comparison UI, sensitivity analysis, PDF reports, simulator integrations.
   sensitivity analysis, and simulator integrations.
 
 ## Acceptance tracking

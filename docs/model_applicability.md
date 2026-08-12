@@ -66,6 +66,8 @@ The following pieces are currently in place:
 | `Phasepy/Peng-Robinson` | `phasepy` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
 | `Clapeyron/Peng-Robinson` | `clapeyron` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
 | `SRK` | `thermo` | `available` | `false` | Pilot binary SRK VLE/flash requiring an explicit reviewed or user-attested kij ParameterSet; benchmark closure pending |
+| `RK` | `thermo` | `available` | `false` | Pilot binary Redlich-Kwong VLE/flash requiring an explicit reviewed or user-attested kij ParameterSet; benchmark closure pending |
+| `UNIFAC` | `thermo` | `available` | `false` | Predictive original UNIFAC pilot using DDBST group assignments; no binary ParameterSet required; benchmark closure pending |
 | `NRTL` | `internal` | `available` | `true` | Low-/moderate-pressure non-ideal VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; legacy DECHEMA sets remain prototype |
 | `UNIQUAC` | `internal` | `available` | `true` | Low-/moderate-pressure non-ideal VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; UNIQUAC benchmarks exclude pure endpoints |
 | `Wilson` | `internal` | `available` | `true` | Low-/moderate-pressure VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; LLE is explicitly rejected |
@@ -181,6 +183,45 @@ Current status:
 - `production_ready` is `true` for the ChemSep-validated ethanol/water and ethanol/benzene binaries benchmarked against experimental isobaric VLE data
 - Legacy DECHEMA parameter sets for other binaries remain available but are not yet production-validated
 
+### UNIFAC
+
+Applicable to:
+
+- Low- to moderate-pressure non-electrolyte VLE and flash screening
+- Multicomponent systems where DDBST UNIFAC group assignments are available
+- Cases where no reviewed binary interaction parameter set exists
+
+Rejected when:
+
+- A component has no DDBST group assignment or no CAS number
+- The requested calculation is outside the supported task scope
+- `LLE` is requested in the current pilot
+- The requested equilibrium type is otherwise unsupported
+
+Current status:
+
+- Predictive original UNIFAC backend is implemented and registered
+- `production_ready` is `false` until experimental benchmarks and applicability review are complete
+
+### RK
+
+Applicable to:
+
+- Moderate- to high-pressure hydrocarbon/light-gas binary VLE and flash
+- Systems with an explicit reviewed or user-attested RK kij `ParameterSet`
+
+Rejected when:
+
+- Required binary `kij` parameters are unavailable
+- More than two components are requested
+- `LLE` is requested
+- The requested equilibrium type is otherwise unsupported
+
+Current status:
+
+- Pilot `thermo.RKMIX` backend is implemented and registered
+- `production_ready` is `false` until reviewed kij coverage and benchmark closure are complete
+
 ## Current Boundary
 
 The current boundary of this feature is intentionally narrow:
@@ -189,8 +230,8 @@ The current boundary of this feature is intentionally narrow:
 - This layer does not change backend execution logic even when a backend already exists in the codebase.
 - This document does not evaluate or summarize external traditional-model code quality.
 - This document does not describe unconfirmed AI model capabilities.
-- `SRK` is tracked as a pilot adapter; `production_ready` stays `false` until reviewed kij
-  coverage and benchmark closure are complete.
+- `SRK`, `RK`, and `UNIFAC` are tracked as pilot adapters; `production_ready` stays `false`
+  until reviewed parameters, benchmark closure, and applicability review are complete.
 
 Also intentionally out of scope for the current implementation:
 

@@ -14,6 +14,8 @@ EXPECTED_NAMES = {
     "Phasepy/Peng-Robinson",
     "Clapeyron/Peng-Robinson",
     "SRK",
+    "RK",
+    "UNIFAC",
     "Wilson",
     "NRTL",
     "UNIQUAC",
@@ -23,7 +25,7 @@ EXPECTED_NAMES = {
 def test_real_model_catalog_yaml_files_all_load() -> None:
     catalog = load_model_catalog()
 
-    assert len(catalog) == 8
+    assert len(catalog) == 10
     assert set(catalog) == EXPECTED_NAMES
 
 

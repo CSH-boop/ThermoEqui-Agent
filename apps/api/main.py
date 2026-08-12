@@ -8,19 +8,17 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-
-from dotenv import load_dotenv
-
-load_dotenv()
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+from agent.comparison import compare_models
 from agent.executor import execute_task
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
 from agent.providers import (
@@ -40,6 +38,7 @@ from schemas.domain import (
     ErrorBody,
     ErrorResponse,
     ModelCard,
+    ModelComparisonResponse,
     ModelRecommendation,
     ParameterSet,
     RunListResponse,
@@ -50,6 +49,8 @@ from schemas.domain import (
 )
 from thermo_engine.errors import ThermoEquiError
 from thermo_engine.service import validate_equilibrium_result
+
+load_dotenv()
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s %(message)s")
 logger = logging.getLogger("thermoequi.api")
@@ -336,6 +337,16 @@ def isothermal_vle(task: TaskManifest, request: Request) -> CalculationEnvelope:
 @app.post("/api/calculations/tp-flash", response_model=CalculationEnvelope)
 def tp_flash(task: TaskManifest, request: Request) -> CalculationEnvelope:
     return execute(_force_type(task, "tp_flash"), request.state.request_id)
+
+
+@app.post("/api/calculations/compare", response_model=ModelComparisonResponse)
+def compare_calculations(task: TaskManifest, request: Request) -> ModelComparisonResponse:
+    parameter_sets = repository_parameter_sets()
+    task = _task_with_repository_parameters(task, parameter_sets)
+    return compare_models(
+        task,
+        available_parameter_models=available_parameter_models_for_task(task, parameter_sets),
+    )
 
 
 @app.post("/api/calculations/azeotrope", response_model=CalculationEnvelope)
