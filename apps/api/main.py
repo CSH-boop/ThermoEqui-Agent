@@ -8,13 +8,12 @@ import json
 import logging
 import os
 from collections.abc import AsyncIterator, Awaitable, Callable
-
-from dotenv import load_dotenv
-
-load_dotenv()
 from contextlib import asynccontextmanager
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,8 +47,11 @@ from schemas.domain import (
     TaskManifest,
     ValidationReport,
 )
+from thermo_engine.dwsim_export import export_dwsim_flowsheet
 from thermo_engine.errors import ThermoEquiError
 from thermo_engine.service import validate_equilibrium_result
+
+load_dotenv()
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"), format="%(levelname)s %(message)s")
 logger = logging.getLogger("thermoequi.api")
@@ -116,7 +118,8 @@ app = FastAPI(
 )
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -375,11 +378,20 @@ def get_run(run_id: str) -> RunRecord:
 
 
 @app.get("/api/runs/{run_id}/export")
-def export_run(run_id: str, format: str = Query(default="json", pattern="^(json|csv)$")) -> Response:
+def export_run(run_id: str, format: str = Query(default="json", pattern="^(json|csv|dwsim)$")) -> Response:
     run = repository.get_run(run_id)
     if run is None:
         raise HTTPException(status_code=404, detail="Run not found")
     repository.record_export(run_id, format)
+    if format == "dwsim":
+        with TemporaryDirectory(prefix="thermoequi-dwsim-") as export_dir:
+            path = export_dwsim_flowsheet(run, Path(export_dir) / f"{run_id}.dwxmz")
+            dwsim_content = path.read_bytes()
+        return Response(
+            content=dwsim_content,
+            media_type="application/octet-stream",
+            headers={"Content-Disposition": f'attachment; filename="{run_id}.dwxmz"'},
+        )
     if format == "json":
         content = json.dumps(run.model_dump(mode="json"), ensure_ascii=False, indent=2)
         return Response(

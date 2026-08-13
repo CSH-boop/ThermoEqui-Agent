@@ -318,7 +318,22 @@ class ConversationState:
     run_ids: list[str] = field(default_factory=list)
 
 
-_CALCULATION_REQUEST_VERBS = ("计算", "算", "求", "calc", "compute", "simulate", "flash", "求算", "算出", "推算")
+_CALCULATION_REQUEST_VERBS = (
+    "计算",
+    "算",
+    "求",
+    "判断",
+    "搜索",
+    "calc",
+    "compute",
+    "simulate",
+    "classify",
+    "search",
+    "flash",
+    "求算",
+    "算出",
+    "推算",
+)
 _NON_REQUEST_CALCULATION_PREFIXES = (
     "模型计算",
     "方程计算",
@@ -347,6 +362,7 @@ def _is_active_calculation_request(message: str) -> bool:
     Passive: "模型计算得到", "经计算表明", "计算结果显示"
     """
     lower = message.casefold()
+
     for prefix in _NON_REQUEST_CALCULATION_PREFIXES:
         if prefix.casefold() in lower:
             return False
@@ -438,6 +454,12 @@ class DeterministicProvider:
         pressure, pressure_assumption = self._pressure(message)
         temperature = self._temperature(message)
         if previous and any(word in lower for word in ("改为", "改成", "再算", "change", "rerun")):
+            updated_components = component_list or previous.components
+            components_changed = {
+                component.cas_number or component.component_id for component in updated_components
+            } != {
+                component.cas_number or component.component_id for component in previous.components
+            }
             conditions = previous.conditions.model_copy(
                 update={
                     **({"pressure_kPa": pressure} if pressure is not None else {}),
@@ -447,19 +469,22 @@ class DeterministicProvider:
             assumptions = [*previous.assumptions]
             if pressure_assumption and pressure_assumption not in assumptions:
                 assumptions.append(pressure_assumption)
-            updates = {
-                "task_id": str(uuid4()),
-                "conditions": conditions,
-                "assumptions": assumptions,
-                "original_question": message,
-            }
-            if component_list:
-                updates["components"] = component_list
-            return previous.model_copy(update=updates)
+            return previous.model_copy(
+                update={
+                    "task_id": str(uuid4()),
+                    "components": updated_components,
+                    "conditions": conditions,
+                    "assumptions": assumptions,
+                    "model_name": None if components_changed else previous.model_name,
+                    "original_question": message,
+                }
+            )
         if not component_list:
             return None
         calculation_type = self._calculation_type(lower)
-        equilibrium_type = "FLASH" if calculation_type == "tp_flash" else "LLE" if calculation_type == "lle" else "VLE"
+        equilibrium_type = "FLASH" if calculation_type in {"tp_flash", "phase_stability"} else "LLE"
+        if calculation_type not in {"tp_flash", "phase_stability", "lle"}:
+            equilibrium_type = "VLE"
         assumptions = [pressure_assumption] if pressure_assumption else []
         conditions = ThermodynamicConditions(temperature_K=temperature, pressure_kPa=pressure)
         return TaskManifest(
@@ -535,6 +560,8 @@ class DeterministicProvider:
 
     @staticmethod
     def _calculation_type(lower: str) -> str:
+        if "相态" in lower or "phase classification" in lower or "phase state" in lower:
+            return "phase_stability"
         if "lle" in lower or "液液" in lower or "liquid-liquid" in lower:
             return "lle"
         if "p-x-y" in lower or "pxy" in lower or "等温" in lower:
@@ -648,6 +675,7 @@ class ConversationOrchestrator:
             Intent.PROCESS_RECOMMENDATION,
             Intent.RESULT_INTERPRETATION,
         }:
+
             strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}  # 新增
             try:
                 statements = await self.provider.answer_with_evidence(message, strict=strict)
@@ -900,6 +928,13 @@ class ConversationOrchestrator:
             missing.append("pressure_kPa")
         if task.calculation_type in {"isothermal_vle", "tp_flash"} and task.conditions.temperature_K is None:
             missing.append("temperature_K")
+        if task.calculation_type == "phase_stability":
+            if task.conditions.temperature_K is None:
+                missing.append("temperature_K")
+            if task.conditions.pressure_kPa is None:
+                missing.append("pressure_kPa")
+            if task.conditions.feed_composition is None:
+                missing.append("feed_composition")
         if task.calculation_type == "tp_flash" and task.conditions.feed_composition is None:
             missing.append("feed_composition")
         if task.calculation_type == "bubble_point" and task.conditions.liquid_composition is None:

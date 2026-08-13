@@ -246,6 +246,7 @@ export function Workbench() {
                 <div className="results-actions">
                   <a href={exportUrl(calculation.result.run_id, "json")}>下载 JSON</a>
                   <a href={exportUrl(calculation.result.run_id, "csv")}>下载 CSV</a>
+                  <a href={exportUrl(calculation.result.run_id, "dwsim")}>下载 DWSIM</a>
                 </div>
               )}
             </div>
