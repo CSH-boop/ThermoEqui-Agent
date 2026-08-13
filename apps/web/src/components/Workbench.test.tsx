@@ -175,6 +175,20 @@ describe("Workbench", () => {
       "href",
       expect.stringContaining("format=csv"),
     );
+    expect(screen.getByRole("button", { name: "下载 DWSIM" })).toBeInTheDocument();
+  });
+
+  it("shows a DWSIM export error without leaving the workbench", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, json: async () => response })
+      .mockResolvedValueOnce({ ok: false, json: async () => ({ error: { message: "DWSIM was not found." } }) });
+    vi.stubGlobal("fetch", fetchMock);
+    render(<Workbench />);
+    fireEvent.click(screen.getByRole("button", { name: /运行任务/i }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "下载 DWSIM" })).toBeInTheDocument());
+    fireEvent.click(screen.getByRole("button", { name: "下载 DWSIM" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("DWSIM was not found."));
   });
 
   it("shows model applicability feedback in the model tab", async () => {

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+import thermo_engine.dwsim_export as dwsim_export
 from schemas.domain import RunRecord
 from thermo_engine.dwsim_export import export_dwsim_flowsheet
 
@@ -124,3 +125,20 @@ def test_export_rejects_a_non_dwsim_file_extension(tmp_path: Path) -> None:
             factory=FakeAutomation,
             object_type=FakeObjectType,
         )
+
+
+def test_locate_dwsim_home_uses_standard_location_when_not_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    install_dir = tmp_path / "Program Files" / "DWSIM"
+    install_dir.mkdir(parents=True)
+    (install_dir / "DWSIM.Automation.dll").write_bytes(b"assembly")
+    monkeypatch.delenv("DWSIM_HOME", raising=False)
+    monkeypatch.setattr(dwsim_export.shutil, "which", lambda _: None)
+    monkeypatch.setattr(dwsim_export, "_windows_registry_install_dirs", lambda: [])
+    monkeypatch.setenv("ProgramFiles", str(tmp_path / "Program Files"))
+    monkeypatch.delenv("ProgramW6432", raising=False)
+    monkeypatch.delenv("ProgramFiles(x86)", raising=False)
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+
+    assert dwsim_export.locate_dwsim_home() == install_dir.resolve()

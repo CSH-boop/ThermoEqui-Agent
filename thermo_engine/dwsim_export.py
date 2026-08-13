@@ -7,6 +7,7 @@ core calculation package runnable on hosts that do not have DWSIM installed.
 from __future__ import annotations
 
 import os
+import shutil
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -35,6 +36,65 @@ _PROPERTY_PACKAGES = {
 }
 
 
+def _windows_registry_install_dirs() -> list[Path]:
+    """Return DWSIM installation directories registered by the Windows installer."""
+
+    if sys.platform != "win32":
+        return []
+    try:
+        import winreg
+    except ImportError:  # pragma: no cover - only relevant on Windows
+        return []
+
+    directories: list[Path] = []
+    registry_locations = (
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\App Paths\\DWSIM.exe"),
+        (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\App Paths\\DWSIM.exe"),
+    )
+    for hive, key_path in registry_locations:
+        try:
+            with winreg.OpenKey(hive, key_path) as key:
+                executable, _ = winreg.QueryValueEx(key, None)  # type: ignore[arg-type]
+        except OSError:
+            continue
+        directories.append(Path(str(executable)).expanduser().parent)
+    return directories
+
+
+def _candidate_dwsim_dirs() -> list[Path]:
+    """Collect explicit and conventional DWSIM installation locations."""
+
+    candidates: list[Path] = []
+    configured_home = os.getenv("DWSIM_HOME")
+    if configured_home:
+        candidates.append(Path(configured_home).expanduser())
+
+    executable = shutil.which("DWSIM.exe")
+    if executable:
+        candidates.append(Path(executable).parent)
+
+    for variable in ("ProgramFiles", "ProgramW6432", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        root = os.getenv(variable)
+        if root:
+            candidates.extend((Path(root) / "DWSIM", Path(root) / "DWSIM 9"))
+    candidates.extend(_windows_registry_install_dirs())
+    return candidates
+
+
+def locate_dwsim_home() -> Path | None:
+    """Find an installed DWSIM instance containing the Automation assembly."""
+
+    seen: set[Path] = set()
+    for candidate in _candidate_dwsim_dirs():
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        if (resolved / "DWSIM.Automation.dll").is_file():
+            return resolved
+    return None
+
+
 def _runtime_error(message: str, *, details: dict[str, object] | None = None) -> ThermoEquiError:
     return ThermoEquiError(
         FailureType.MISSING_DATA,
@@ -47,20 +107,16 @@ def _runtime_error(message: str, *, details: dict[str, object] | None = None) ->
 def _automation_factory() -> tuple[AutomationFactory, Any]:
     """Load DWSIM assemblies only for an explicit export request."""
 
-    dwsim_home = os.getenv("DWSIM_HOME")
-    if not dwsim_home:
-        raise _runtime_error("DWSIM_HOME is not configured.", details={"environment_variable": "DWSIM_HOME"})
-
-    install_dir = Path(dwsim_home).expanduser().resolve()
-    automation_dll = install_dir / "DWSIM.Automation.dll"
-    if not automation_dll.is_file():
+    install_dir = locate_dwsim_home()
+    if install_dir is None:
         raise _runtime_error(
-            "DWSIM.Automation.dll was not found in DWSIM_HOME.",
-            details={"dwsim_home": str(install_dir), "required_file": "DWSIM.Automation.dll"},
+            "DWSIM was not found. Install DWSIM or set DWSIM_HOME to its installation directory.",
+            details={"environment_variable": "DWSIM_HOME", "required_file": "DWSIM.Automation.dll"},
         )
+    automation_dll = install_dir / "DWSIM.Automation.dll"
 
     try:
-        import clr  # type: ignore[import-not-found]
+        import clr  # type: ignore[import-untyped]
     except ImportError as exc:
         raise _runtime_error("pythonnet is not installed.", details={"required_package": "pythonnet"}) from exc
 

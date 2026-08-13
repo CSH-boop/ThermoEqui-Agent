@@ -21,6 +21,7 @@ requires-python = ">=3.11"
   "thermo==0.6.1",
   "uvicorn[standard]==0.34.0",
   "sentence-transformers>=2.2.0",
+  "pythonnet>=3.0.3",
 ]
 
 [project.optional-dependencies]

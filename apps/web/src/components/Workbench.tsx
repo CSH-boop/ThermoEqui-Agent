@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
-import { exportUrl, rerunTask, sendChat } from "@/lib/api";
+import { downloadDwsim, exportUrl, rerunTask, sendChat } from "@/lib/api";
 import type { AgentStep, CalculationEnvelope, ChatResponse, TaskManifest } from "@/lib/types";
 import { AgentRuntime } from "./AgentRuntime";
 import { FlashResultCard } from "./FlashResultCard";
@@ -57,6 +57,7 @@ export function Workbench() {
   const [executionSteps, setExecutionSteps] = useState<AgentStep[]>([]);
   const [activeTab, setActiveTab] = useState<DetailTab>("table");
   const [loading, setLoading] = useState(false);
+  const [downloadingDwsim, setDownloadingDwsim] = useState(false);
   const [diagnostic, setDiagnostic] = useState<string>();
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -114,6 +115,19 @@ export function Workbench() {
       setDiagnostic(error instanceof Error ? error.message : "重新计算失败");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function downloadDwsimFlowsheet() {
+    if (!calculation || downloadingDwsim) return;
+    setDownloadingDwsim(true);
+    setDiagnostic(undefined);
+    try {
+      await downloadDwsim(calculation.result.run_id);
+    } catch (error) {
+      setDiagnostic(error instanceof Error ? error.message : "DWSIM flowsheet export failed.");
+    } finally {
+      setDownloadingDwsim(false);
     }
   }
 
@@ -246,7 +260,9 @@ export function Workbench() {
                 <div className="results-actions">
                   <a href={exportUrl(calculation.result.run_id, "json")}>下载 JSON</a>
                   <a href={exportUrl(calculation.result.run_id, "csv")}>下载 CSV</a>
-                  <a href={exportUrl(calculation.result.run_id, "dwsim")}>下载 DWSIM</a>
+                  <button type="button" className="export-link" onClick={downloadDwsimFlowsheet} disabled={downloadingDwsim}>
+                    {downloadingDwsim ? "Preparing DWSIM..." : "下载 DWSIM"}
+                  </button>
                 </div>
               )}
             </div>

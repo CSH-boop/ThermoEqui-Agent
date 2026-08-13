@@ -42,3 +42,17 @@ export function rerunTask(task: TaskManifest): Promise<CalculationEnvelope> {
 export function exportUrl(runId: string, format: "json" | "csv" | "dwsim"): string {
   return `${API_URL}/api/runs/${runId}/export?format=${format}`;
 }
+
+export async function downloadDwsim(runId: string): Promise<void> {
+  const response = await fetch(exportUrl(runId, "dwsim"));
+  if (!response.ok) {
+    const payload = await response.json().catch(() => undefined);
+    throw new Error(payload?.error?.message ?? "DWSIM flowsheet export failed.");
+  }
+  const downloadUrl = URL.createObjectURL(await response.blob());
+  const anchor = document.createElement("a");
+  anchor.href = downloadUrl;
+  anchor.download = `${runId}.dwxmz`;
+  anchor.click();
+  URL.revokeObjectURL(downloadUrl);
+}
