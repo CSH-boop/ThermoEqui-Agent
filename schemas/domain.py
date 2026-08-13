@@ -288,6 +288,27 @@ class CalculationEnvelope(BaseModel):
     model_recommendations: list[ModelRecommendation] = Field(default_factory=list)
 
 
+class ModelComparisonEntry(BaseModel):
+    model_name: str
+    score: float
+    executable: bool
+    result: CalculationResult | None = None
+    validation: ValidationReport | None = None
+    failure: FailureDetail | None = None
+    parameter_sources: list[dict[str, str]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
+class ModelComparisonResponse(BaseModel):
+    task: TaskManifest
+    entries: list[ModelComparisonEntry]
+    executed_count: int = Field(ge=0)
+    passed_count: int = Field(ge=0)
+    warning_count: int = Field(ge=0)
+    failed_count: int = Field(ge=0)
+    summary: str
+
+
 class ScoreBreakdown(BaseModel):
     phase_support_score: float
     system_match_score: float

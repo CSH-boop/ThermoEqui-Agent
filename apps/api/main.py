@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel
 
+from agent.comparison import compare_models
 from agent.executor import execute_task
 from agent.orchestrator import ConversationOrchestrator, DeterministicProvider
 from agent.providers import (
@@ -39,6 +40,7 @@ from schemas.domain import (
     ErrorBody,
     ErrorResponse,
     ModelCard,
+    ModelComparisonResponse,
     ModelRecommendation,
     ParameterSet,
     RunListResponse,
@@ -339,6 +341,16 @@ def isothermal_vle(task: TaskManifest, request: Request) -> CalculationEnvelope:
 @app.post("/api/calculations/tp-flash", response_model=CalculationEnvelope)
 def tp_flash(task: TaskManifest, request: Request) -> CalculationEnvelope:
     return execute(_force_type(task, "tp_flash"), request.state.request_id)
+
+
+@app.post("/api/calculations/compare", response_model=ModelComparisonResponse)
+def compare_calculations(task: TaskManifest, request: Request) -> ModelComparisonResponse:
+    parameter_sets = repository_parameter_sets()
+    task = _task_with_repository_parameters(task, parameter_sets)
+    return compare_models(
+        task,
+        available_parameter_models=available_parameter_models_for_task(task, parameter_sets),
+    )
 
 
 @app.post("/api/calculations/azeotrope", response_model=CalculationEnvelope)
