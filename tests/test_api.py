@@ -455,7 +455,7 @@ def test_request_validation_and_not_found_use_unified_error_shape() -> None:
         assert missing.json()["error"]["code"] == "http_404"
 
 
-def test_deepseek_failure_returns_sanitized_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_deepseek_failure_returns_sanitized_fallback_response(monkeypatch: pytest.MonkeyPatch) -> None:
     async def reject(_: httpx.Request) -> httpx.Response:
         return httpx.Response(401, json={"error": {"message": "server-secret-detail"}})
 
@@ -468,8 +468,11 @@ def test_deepseek_failure_returns_sanitized_gateway_error(monkeypatch: pytest.Mo
     with client() as test_client:
         response = test_client.post("/api/chat", json={"message": "解释 NRTL"})
 
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "external_llm_provider_error"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"]
+    assert payload["statements"]
+    assert payload["statements"][0]["category"] == "Warning"
     assert "test-key" not in response.text
     assert "server-secret-detail" not in response.text
 
@@ -503,7 +506,7 @@ def test_invalid_deepseek_intent_falls_back_to_deterministic_classification(
     assert request_count == 2
 
 
-def test_unparseable_deepseek_task_is_reported_as_gateway_error(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unparseable_deepseek_task_returns_sanitized_fallback_response(monkeypatch: pytest.MonkeyPatch) -> None:
     responses = [
         "EQUILIBRIUM_CALCULATION",
         "not-a-task-manifest",
@@ -526,12 +529,15 @@ def test_unparseable_deepseek_task_is_reported_as_gateway_error(monkeypatch: pyt
     with client() as test_client:
         response = test_client.post("/api/chat", json={"message": "计算苯-甲苯的T-x-y曲线"})
 
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "external_llm_output_error"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"]
+    assert payload["statements"]
+    assert payload["statements"][0]["category"] == "Warning"
     assert "not-a-task-manifest" not in response.text
 
 
-def test_malformed_deepseek_envelope_is_reported_as_sanitized_gateway_error(
+def test_malformed_deepseek_envelope_returns_sanitized_fallback_response(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     async def respond(_: httpx.Request) -> httpx.Response:
@@ -546,6 +552,9 @@ def test_malformed_deepseek_envelope_is_reported_as_sanitized_gateway_error(
     with client() as test_client:
         response = test_client.post("/api/chat", json={"message": "解释 NRTL"})
 
-    assert response.status_code == 502
-    assert response.json()["error"]["code"] == "external_llm_output_error"
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["answer"]
+    assert payload["statements"]
+    assert payload["statements"][0]["category"] == "Warning"
     assert "upstream-private-content" not in response.text

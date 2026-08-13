@@ -17,6 +17,7 @@ from schemas.domain import (
     ComponentIdentity,
     EvidenceStatement,
     Intent,
+    ParameterSet,
     TaskManifest,
     ThermodynamicConditions,
 )
@@ -280,9 +281,7 @@ def _has_positive_scope_marker(message: str, markers: tuple[str, ...]) -> bool:
         r"(?:设计|模拟|优化|计算|做|搞|进行|开展|搭建|建立|开发)"
     )
     # Verbs that can form a request when combined with topic keywords
-    _REQUEST_VERBS_ALONE = re.compile(
-        r"(?:设计|模拟|优化|搭建|建立|开发|计算)"
-    )
+    _REQUEST_VERBS_ALONE = re.compile(r"(?:设计|模拟|优化|搭建|建立|开发|计算)")
     # Additional unsupported topic keywords that can appear in flexible word order
     _FLEXIBLE_EXCLUDED_TOPICS = (
         "精馏塔",
@@ -301,7 +300,7 @@ def _has_positive_scope_marker(message: str, markers: tuple[str, ...]) -> bool:
                 return True
             # Also check if the marker appears as a standalone topic
             # (preceded by punctuation or start of string)
-            before = lower[max(0, match.start() - 5):match.start()]
+            before = lower[max(0, match.start() - 5) : match.start()]
             if match.start() == 0 or re.search(r"[\s，,。.！!？?、；;：:（(]\s*$", before):
                 return True
     # Check for flexible word-order combinations (e.g., "设计一个精馏塔")
@@ -336,10 +335,24 @@ _CALCULATION_REQUEST_VERBS = (
     "推算",
 )
 _NON_REQUEST_CALCULATION_PREFIXES = (
-    "模型计算", "方程计算", "经计算", "通过计算", "由计算", "用计算",
-    "计算得到", "计算得出", "计算结果", "计算显示", "计算表明",
-    "经过计算", "理论计算", "模拟计算",
+    "模型计算",
+    "方程计算",
+    "经计算",
+    "通过计算",
+    "由计算",
+    "用计算",
+    "计算得到",
+    "计算得出",
+    "计算结果",
+    "计算显示",
+    "计算表明",
+    "经过计算",
+    "理论计算",
+    "模拟计算",
 )
+
+
+_CALCULATION_SEARCH_VERBS = ("搜索", "查找")
 
 
 def _is_active_calculation_request(message: str) -> bool:
@@ -349,9 +362,15 @@ def _is_active_calculation_request(message: str) -> bool:
     Passive: "模型计算得到", "经计算表明", "计算结果显示"
     """
     lower = message.casefold()
-    if any(prefix.casefold() in lower for prefix in _NON_REQUEST_CALCULATION_PREFIXES):
-        return False
-    return any(verb.casefold() in lower for verb in _CALCULATION_REQUEST_VERBS)
+
+    for prefix in _NON_REQUEST_CALCULATION_PREFIXES:
+        if prefix.casefold() in lower:
+            return False
+    if any(verb.casefold() in lower for verb in _CALCULATION_REQUEST_VERBS):
+        return True
+    if any(verb.casefold() in lower for verb in _CALCULATION_SEARCH_VERBS):
+        return True
+    return False
 
 
 class DeterministicProvider:
@@ -428,6 +447,7 @@ class DeterministicProvider:
         if _is_active_calculation_request(message):
             return Intent.EQUILIBRIUM_CALCULATION
         return Intent.CONCEPT_QA
+
     async def formulate_task(self, message: str, previous: TaskManifest | None = None) -> TaskManifest | None:
         lower = message.casefold()
         component_list = _requested_components(message)
@@ -555,16 +575,16 @@ class DeterministicProvider:
         if "共沸" in lower or "azeotrope" in lower:
             return "azeotrope"
         return "isobaric_vle"
-                                                   # 改动7.30
-def _build_calculation_summary(           
+        # 改动7.30
+
+
+def _build_calculation_summary(
     envelope: CalculationEnvelope,
     components: list[ComponentIdentity],
 ) -> str:
     """从计算结果构造可读摘要，替代硬编码的"计算完成"。"""
     result = envelope.result
-    del components
     parts: list[str] = [f"模型：{result.model_name}"]
-
 
     if result.temperature_K is not None:
         parts.append(f"T={result.temperature_K:.2f} K")
@@ -576,7 +596,7 @@ def _build_calculation_summary(
             if p.fraction < 1e-10:
                 continue
             c_str = ", ".join(f"{x:.4f}" for x in p.composition)
-            parts.append(f"{p.phase}相({p.fraction*100:.1f}%)：({c_str})")
+            parts.append(f"{p.phase}相({p.fraction * 100:.1f}%)：({c_str})")
         if result.vapor_fraction is not None:
             parts.append(f"汽化分率 β={result.vapor_fraction:.4f}")
     elif result.points:
@@ -589,6 +609,8 @@ def _build_calculation_summary(
         parts.append(f"⚠ {first[:80]}{'…' if len(first) > 80 else ''}")
 
     return "计算完成。\n" + "\n".join(parts)
+
+
 class ConversationOrchestrator:
     def __init__(
         self,
@@ -600,11 +622,18 @@ class ConversationOrchestrator:
         self.graph = BoundedAgentGraph(self.provider, self.tools)
         self.states: dict[str, ConversationState] = {}
 
-    async def parse(self, message: str, conversation_id: str | None = None) -> tuple[Intent, TaskManifest | None]:
+    async def parse(
+        self,
+        message: str,
+        conversation_id: str | None = None,
+        parameter_sets: list[ParameterSet] | None = None,
+    ) -> tuple[Intent, TaskManifest | None]:
         intent = await self._classify_intent(message)
         state = self.states.get(conversation_id or "")
         task = await self.provider.formulate_task(message, state.task if state else None)
         if task is not None:
+            if parameter_sets:
+                task = self._merge_parameter_sets(task, parameter_sets)
             task = self._prepare_task(
                 message,
                 task,
@@ -612,7 +641,12 @@ class ConversationOrchestrator:
             )
         return intent, task
 
-    async def chat(self, message: str, conversation_id: str | None = None) -> ChatResponse:
+    async def chat(
+        self,
+        message: str,
+        conversation_id: str | None = None,
+        parameter_sets: list[ParameterSet] | None = None,
+    ) -> ChatResponse:
         conversation_id = conversation_id or str(uuid4())
         state = self.states.setdefault(conversation_id, ConversationState())
         intent = await self._classify_intent(message)
@@ -641,13 +675,19 @@ class ConversationOrchestrator:
             Intent.PROCESS_RECOMMENDATION,
             Intent.RESULT_INTERPRETATION,
         }:
-            strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}
+
+            strict = intent in {Intent.PARAMETER_QUERY, Intent.DATA_QUERY}  # 新增
             try:
                 statements = await self.provider.answer_with_evidence(message, strict=strict)
-            except AttributeError:
-                statements = await DeterministicProvider().answer_with_evidence(message, strict=strict)
             except (LLMProviderError, LLMProviderOutputError):
-                statements = []
+                statements = answer_with_skills(message, intent)
+                if not statements:
+                    statements = [
+                        EvidenceStatement(
+                            category="Warning",
+                            text="外部模型暂时不可用；请稍后重试或改用确定性计算接口。",
+                        )
+                    ]
             if not statements or statements[0].category == "Warning":
                 skill_statements = answer_with_skills(message, intent)
                 if skill_statements:
@@ -658,7 +698,20 @@ class ConversationOrchestrator:
                 answer="\n".join(item.text for item in statements),
                 statements=statements,
             )
-        task = await self.provider.formulate_task(message, state.task)
+        try:
+            task = await self.provider.formulate_task(message, state.task)
+        except (LLMProviderError, LLMProviderOutputError) as error:
+            return ChatResponse(
+                conversation_id=conversation_id,
+                intent=intent,
+                answer=str(error),
+                statements=[
+                    EvidenceStatement(
+                        category="Warning",
+                        text="外部模型暂时不可用；请稍后重试或改用确定性计算接口。",
+                    )
+                ],
+            )
         if task is None:
             return ChatResponse(
                 conversation_id=conversation_id,
@@ -666,11 +719,21 @@ class ConversationOrchestrator:
                 answer="缺少可识别的组分，尚未执行计算。",
                 statements=[EvidenceStatement(category="Warning", text="需要明确组分身份。")],
             )
-        task = self._prepare_task(
-            message,
-            task,
-            previous_task=state.task if intent == Intent.TASK_CORRECTION else None,
-        )
+        if parameter_sets:
+            task = self._merge_parameter_sets(task, parameter_sets)
+        try:
+            task = self._prepare_task(
+                message,
+                task,
+                previous_task=state.task if intent == Intent.TASK_CORRECTION else None,
+            )
+        except LLMProviderOutputError as error:
+            return ChatResponse(
+                conversation_id=conversation_id,
+                intent=intent,
+                answer=str(error),
+                statements=[EvidenceStatement(category="Warning", text="请明确组分与条件后重试。")],
+            )
         state.task = task
         required_missing = self._missing_conditions(task)
         if required_missing:
@@ -721,7 +784,7 @@ class ConversationOrchestrator:
             return deterministic_intent
         try:
             provider_intent = await self.provider.classify_intent(message)
-        except LLMProviderOutputError:
+        except (LLMProviderError, LLMProviderOutputError):
             return deterministic_intent
         if (
             provider_intent == Intent.EQUILIBRIUM_CALCULATION
@@ -736,10 +799,7 @@ class ConversationOrchestrator:
         ):
             return deterministic_intent
 
-        if (
-            deterministic_intent == Intent.MODEL_SELECTION_QA
-            and provider_intent == Intent.EQUILIBRIUM_CALCULATION
-        ):
+        if deterministic_intent == Intent.MODEL_SELECTION_QA and provider_intent == Intent.EQUILIBRIUM_CALCULATION:
             return deterministic_intent
         if provider_intent == Intent.UNSUPPORTED_TASK and deterministic_intent in {
             Intent.CONCEPT_QA,
@@ -884,3 +944,18 @@ class ConversationOrchestrator:
         if task.calculation_type == "lle" and task.conditions.temperature_K is None:
             missing.append("temperature_K")
         return missing
+
+    @staticmethod
+    def _merge_parameter_sets(
+        task: TaskManifest,
+        parameter_sets: list[ParameterSet],
+    ) -> TaskManifest:
+        seen = {parameter_set.parameter_set_id for parameter_set in task.parameters}
+        return task.model_copy(
+            update={
+                "parameters": [
+                    *task.parameters,
+                    *(parameter_set for parameter_set in parameter_sets if parameter_set.parameter_set_id not in seen),
+                ]
+            }
+        )

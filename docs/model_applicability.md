@@ -65,9 +65,10 @@ The following pieces are currently in place:
 | `Peng-Robinson` | `thermo` | `available` | `true` | Moderate- to high-pressure VLE and flash for hydrocarbons and reviewed light-gas systems |
 | `Phasepy/Peng-Robinson` | `phasepy` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
 | `Clapeyron/Peng-Robinson` | `clapeyron` | `available` | `false` | Optional external Peng-Robinson backend for VLE and flash |
-| `NRTL` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure non-ideal VLE and flash-style backend with limited reviewed binary parameter coverage |
-| `UNIQUAC` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure non-ideal VLE and flash-style backend with limited reviewed binary parameter coverage |
-| `Wilson` | `internal` | `available` | `false` | Implemented and registered low-/moderate-pressure VLE and flash-style backend; LLE is explicitly rejected |
+| `SRK` | `thermo` | `available` | `false` | Pilot binary SRK VLE/flash requiring an explicit reviewed or user-attested kij ParameterSet; benchmark closure pending |
+| `NRTL` | `internal` | `available` | `true` | Low-/moderate-pressure non-ideal VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; legacy DECHEMA sets remain prototype |
+| `UNIQUAC` | `internal` | `available` | `true` | Low-/moderate-pressure non-ideal VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; UNIQUAC benchmarks exclude pure endpoints |
+| `Wilson` | `internal` | `available` | `true` | Low-/moderate-pressure VLE and flash for ChemSep-validated ethanol/water and ethanol/benzene binaries; LLE is explicitly rejected |
 
 ## Current Filtering Rules
 
@@ -132,7 +133,9 @@ Rejected when:
 Current status:
 
 - Backend code is implemented and registered in the current code package
-- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+- Reviewed binary parameters are managed through the production parameter store and seeded with `thermoequi-seed`
+- `production_ready` is `true` for the ChemSep-validated ethanol/water and ethanol/benzene binaries benchmarked against experimental isobaric VLE data
+- Legacy DECHEMA parameter sets for other binaries remain available but are not yet production-validated
 
 ### UNIQUAC
 
@@ -152,7 +155,10 @@ Rejected when:
 Current status:
 
 - Backend code is implemented and registered in the current code package
-- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+- Reviewed binary parameters are managed through the production parameter store and seeded with `thermoequi-seed`
+- `production_ready` is `true` for the ChemSep-validated ethanol/water and ethanol/benzene binaries benchmarked against experimental isobaric VLE data
+- The UNIQUAC experimental benchmark excludes pure endpoints because combinatorial terms are undefined at x=0/1 in the current backend
+- Legacy DECHEMA parameter sets for other binaries remain available but are not yet production-validated
 
 ### Wilson
 
@@ -171,7 +177,9 @@ Rejected when:
 Current status:
 
 - Backend code is implemented and registered in the current code package
-- `production_ready` remains `false` because reviewed parameter coverage and execution evidence are still limited
+- Reviewed binary parameters are managed through the production parameter store and seeded with `thermoequi-seed`
+- `production_ready` is `true` for the ChemSep-validated ethanol/water and ethanol/benzene binaries benchmarked against experimental isobaric VLE data
+- Legacy DECHEMA parameter sets for other binaries remain available but are not yet production-validated
 
 ## Current Boundary
 
@@ -181,7 +189,8 @@ The current boundary of this feature is intentionally narrow:
 - This layer does not change backend execution logic even when a backend already exists in the codebase.
 - This document does not evaluate or summarize external traditional-model code quality.
 - This document does not describe unconfirmed AI model capabilities.
-- This document does not describe unconfirmed `SRK` support in the main project.
+- `SRK` is tracked as a pilot adapter; `production_ready` stays `false` until reviewed kij
+  coverage and benchmark closure are complete.
 
 Also intentionally out of scope for the current implementation:
 
@@ -189,7 +198,7 @@ Also intentionally out of scope for the current implementation:
 - Component-property rules
 - Ranking or scoring
 - Automatic routing
-- Registry synchronization
+- Registry synchronization is instead covered by `tests/test_backend_registry_contract.py`
 
 ## Minimal Example
 

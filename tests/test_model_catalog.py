@@ -13,6 +13,7 @@ EXPECTED_NAMES = {
     "Peng-Robinson",
     "Phasepy/Peng-Robinson",
     "Clapeyron/Peng-Robinson",
+    "SRK",
     "Wilson",
     "NRTL",
     "UNIQUAC",
@@ -22,7 +23,7 @@ EXPECTED_NAMES = {
 def test_real_model_catalog_yaml_files_all_load() -> None:
     catalog = load_model_catalog()
 
-    assert len(catalog) == 7
+    assert len(catalog) == 8
     assert set(catalog) == EXPECTED_NAMES
 
 
@@ -62,12 +63,12 @@ def test_optional_external_backends_are_not_production_ready() -> None:
     assert catalog["Clapeyron/Peng-Robinson"].production_ready is False
 
 
-def test_activity_coefficient_backends_are_available_but_not_production_ready() -> None:
+def test_activity_coefficient_backends_are_available_and_production_ready() -> None:
     catalog = load_model_catalog()
 
     for name in ("NRTL", "UNIQUAC", "Wilson"):
         assert catalog[name].implementation_status == "available"
-        assert catalog[name].production_ready is False
+        assert catalog[name].production_ready is True
 
 
 def test_ideal_raoult_does_not_claim_lle_support() -> None:
